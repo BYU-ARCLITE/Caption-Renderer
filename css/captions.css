@@ -19,6 +19,25 @@
 	color: red;
 }
 
+.captionator-cue-canvas {
+	pointer-events: none;
+	position: absolute;
+	overflow: hidden;
+	box-sizing: border-box;
+}
+
+.captionator-cue {
+	pointer-events: auto;
+	overflow: hidden;
+}
+
+.captionator-cue-character {
+	position: absolute;
+	display: block;
+	line-height: auto;
+	text-align: center;
+}
+
 q.voice:before {
 	content: attr(title);
 	color:red;
