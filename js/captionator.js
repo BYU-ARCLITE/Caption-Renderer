@@ -9,7 +9,7 @@
 /*jshint strict:true */
 /*Tab indented, tab = 4 spaces*/
 
-var Captionator = (function() {
+var CaptionRenderer = (function() {
 	"use strict";
 	
 	//	Variables you might want to tweak
@@ -598,228 +598,138 @@ var Captionator = (function() {
 			counter++;
 			return String("captionator")+counter.toString(36);
 		}
-		/* synchroniseMediaElements(HTMLVideoElement videoElement)
-			Loops through all the MediaTracks for a given element and manages their display/audibility, synchronising them to the playback of the
-			master video element.
-			This function also synchronises regular HTML5 media elements with a property of syncMaster with a value equal to the ID of the current video
-			element.
-			First parameter: HTMLVideoElement object with associated MediaTracks
-		*/
-		function synchroniseMediaElements(videoElement) {
-			var trackList = videoElement.mediaTracks || [];
-			var options = videoElement._captionatorOptions instanceof Object ? videoElement._captionatorOptions : {};
-			var currentTime = videoElement.currentTime;
-			var synchronisationThreshold = 0.5; // How many seconds of drift will be tolerated before resynchronisation?
-		
-			var synchroniseElement = function(slave,master) {
-				try {
-					if (master.seeking) {
-						slave.pause();
-					}
-			
-					if (slave.currentTime < master.currentTime - synchronisationThreshold || slave.currentTime > master.currentTime + synchronisationThreshold) {
-						slave.currentTime = master.currentTime;
-					}
-			
-					if (slave.paused && !master.paused) {
-						slave.play();
-					} else if (!slave.paused && master.paused) {
-						slave.pause();
-					}
-				} catch(Error) {
-					// Probably tried to seek to an unavailable chunk of video
-				}
-			};
-		
-			// Work out what cues are showing...
-			trackList.forEach(function(track,trackIndex) {
-				if (track.mode === TextTrack.SHOWING && track.readyState >= TextTrack.LOADING) {
-					synchroniseElement(track.mediaElement,videoElement);
-				}
-			});
-		
-			if (videoElement.id) {
-				[].slice.call(document.body.querySelectorAll("*[syncMaster=" + videoElement.id + "]"),0).forEach(function(mediaElement,index) {
-					if (mediaElement.tagName.toLowerCase() === "video" || mediaElement.tagName.toLowerCase() === "audio") {
-						synchroniseElement(mediaElement,videoElement);
-					}
-				});
-			}
-		}
-		return function(videoElement,defaultLanguage,options) {
-			var trackList = [];
+		return function(renderer,defaultLanguage,options) {
+			var trackList = [],
+				videoElement = renderer.element;
 			var language = navigator.language || navigator.userLanguage;
 			var globalLanguage = defaultLanguage || language.split("-")[0];
 			options = options instanceof Object? options : {};
-		
-			if (!videoElement.captioned) {
-				videoElement._captionatorOptions = options;
-				videoElement.className += (videoElement.className.length ? " " : "") + "captioned";
-				videoElement.captioned = true;
+
+			var enabledDefaultTrack = false;
+			[].slice.call(videoElement.querySelectorAll("track"),0).forEach(function(trackElement) {
+				var sources = (trackElement.querySelectorAll("source").length > 0)
+								?trackElement.querySelectorAll("source")
+								:trackElement.getAttribute("src");			
+				var trackObject = renderer.addTextTrack(
+										(trackElement.getAttribute("id")||generateID()),
+										trackElement.getAttribute("kind"),
+										trackElement.getAttribute("label"),
+										trackElement.getAttribute("srclang").split("-")[0],
+										sources,
+										trackElement.getAttribute("type"),
+										trackElement.hasAttribute("default"));
 			
-				var enabledDefaultTrack = false;
-				[].slice.call(videoElement.querySelectorAll("track"),0).forEach(function(trackElement) {
-					var sources = null;
-					if (trackElement.querySelectorAll("source").length > 0) {
-						sources = trackElement.querySelectorAll("source");
-					} else {
-						sources = trackElement.getAttribute("src");
-					}
-				
-					var trackObject = videoElement.addTextTrack(
-											(trackElement.getAttribute("id")||generateID()),
-											trackElement.getAttribute("kind"),
-											trackElement.getAttribute("label"),
-											trackElement.getAttribute("srclang").split("-")[0],
-											sources,
-											trackElement.getAttribute("type"),
-											trackElement.hasAttribute("default"));
-				
-					trackElement.track = trackObject;
-					trackObject.trackNode = trackElement;
-					trackObject.videoNode = videoElement;
-					trackList.push(trackObject);
-				
-					// Now determine whether the track is visible by default.
-					// The comments in this section come straight from the spec...
-					var trackEnabled = false;
-				
-					// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
-					// with this text track kind, text track language, and text track label enabled, and there is no other text track
-					// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
-					// ---> Let the text track mode be showing.
-				
-					if ((trackObject.kind === "subtitles" || trackObject.kind === "captions") &&
-						(defaultLanguage === trackObject.language && options.enableCaptionsByDefault)) {
-						if (!trackList.filter(function(trackObject) {
-								if ((trackObject.kind === "captions" || trackObject.kind === "subtitles") && defaultLanguage === trackObject.language && trackObject.mode === TextTrack.SHOWING) {
-									return true;
-								} else {
-									return false;
-								}
-							}).length) {
-							trackEnabled = true;
-						}
-					}
-				
-					// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
-					// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
-					// kind of chapters whose text track mode is showing
-					// ---> Let the text track mode be showing.
-					
-					if (trackObject.kind === "chapters" && (defaultLanguage === trackObject.language)) {
-						if (!trackList.filter(function(trackObject) {
-								if (trackObject.kind === "chapters" && trackObject.mode === TextTrack.SHOWING) {
-									return true;
-								} else {
-									return false;
-								}
-							}).length) {
-							trackEnabled = true;
-						}
-					}
-				
-					// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
-					// with this text track language and text track label enabled, and there is no other text track in the media element's
-					// list of text tracks with a text track kind of descriptions whose text track mode is showing
-				
-					if (trackObject.kind === "descriptions" && (options.enableDescriptionsByDefault === true) && (defaultLanguage === trackObject.language)) {
-						if (!trackList.filter(function(trackObject) {
-								if (trackObject.kind === "descriptions" && trackObject.mode === TextTrack.SHOWING) {
-									return true;
-								} else {
-									return false;
-								}
-							}).length) {
-							trackEnabled = true;
-						}
-					}
-				
-					// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
-					// the user agent must furthermore change that text track's text track mode to hidden.
-				
-					if (trackEnabled === true) {
-						trackList.forEach(function(trackObject) {
-							if(trackObject.trackNode.hasAttribute("default") && trackObject.mode === TextTrack.SHOWING) {
-								trackObject.mode = TextTrack.HIDDEN;
+				trackElement.track = trackObject;
+				trackObject.trackNode = trackElement;
+				trackObject.videoNode = videoElement;
+				trackList.push(trackObject);
+			
+				// Now determine whether the track is visible by default.
+				// The comments in this section come straight from the spec...
+				var trackEnabled = false;
+			
+				// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
+				// with this text track kind, text track language, and text track label enabled, and there is no other text track
+				// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				if ((trackObject.kind === "subtitles" || trackObject.kind === "captions") &&
+					(defaultLanguage === trackObject.language && options.enableCaptionsByDefault)) {
+					if (!trackList.filter(function(trackObject) {
+							if ((trackObject.kind === "captions" || trackObject.kind === "subtitles") && defaultLanguage === trackObject.language && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
 							}
-						});
+						}).length) {
+						trackEnabled = true;
 					}
-				
-					// If the track element has a default attribute specified, and there is no other text track in the media element's
-					// list of text tracks whose text track mode is showing or showing by default
-					// Let the text track mode be showing by default.
-				
-					if (trackElement.hasAttribute("default")) {
-						if (!trackList.filter(function(trackObject) {
-								if (trackObject.trackNode.hasAttribute("default") && trackObject.trackNode !== trackElement) {
-									return true;
-								} else {
-									return false;
-								}
-							}).length) {
-							trackEnabled = true;
-							trackObject.internalDefault = true;
-						}
-					}
-				
-					// Otherwise
-					// Let the text track mode be disabled.
-				
-					if (trackEnabled === true) {
-						trackObject.mode = TextTrack.SHOWING;
-					}
-				});
+				}
 			
-				videoElement.addEventListener("timeupdate", function(eventData){
-					var videoElement = eventData.target;
-					// update active cues
+				// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
+				// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
+				// kind of chapters whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				if (trackObject.kind === "chapters" && (defaultLanguage === trackObject.language)) {
+					if (!trackList.filter(function(trackObject) {
+							if (trackObject.kind === "chapters" && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
+							}
+						}).length) {
+						trackEnabled = true;
+					}
+				}
+			
+				// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
+				// with this text track language and text track label enabled, and there is no other text track in the media element's
+				// list of text tracks with a text track kind of descriptions whose text track mode is showing
+				if (trackObject.kind === "descriptions" && (options.enableDescriptionsByDefault === true) && (defaultLanguage === trackObject.language)) {
+					if (!trackList.filter(function(trackObject) {
+							if (trackObject.kind === "descriptions" && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
+							}
+						}).length) {
+						trackEnabled = true;
+					}
+				}
+			
+				// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
+				// the user agent must furthermore change that text track's text track mode to hidden.
+				if (trackEnabled === true) {
+					trackList.forEach(function(trackObject) {
+						if(trackObject.trackNode.hasAttribute("default") && trackObject.mode === TextTrack.SHOWING) {
+							trackObject.mode = TextTrack.HIDDEN;
+						}
+					});
+				}
+			
+				// If the track element has a default attribute specified, and there is no other text track in the media element's
+				// list of text tracks whose text track mode is showing or showing by default
+				// Let the text track mode be showing by default.
+				if (trackElement.hasAttribute("default")) {
+					if (!trackList.filter(function(trackObject) {
+							return (trackObject.trackNode.hasAttribute("default") && trackObject.trackNode !== trackElement);
+						}).length) {
+						trackEnabled = true;
+						trackObject.internalDefault = true;
+					}
+				}
+			
+				// Otherwise
+				// Let the text track mode be disabled.
+				if (trackEnabled === true) { trackObject.mode = TextTrack.SHOWING; }
+			});
+
+			window.addEventListener("resize", function(eventData) {
+				renderer.dirtyBit = true; // mark video as dirty, force captionator to rerender captions
+				rebuildCaptions(renderer);
+			},false);
+
+			videoElement.addEventListener("timeupdate", function(eventData){
+				// update active cues
+				try {
+					renderer.tracks.forEach(function(track) {
+						track.activeCues.refreshCues.apply(track.activeCues);
+					});
+				} catch(error) {}
+			
+				rebuildCaptions(renderer);
+			}, false);
+			
+			// Hires mode
+			if (options.enableHighResolution === true) {
+				//TODO: use requestAnimationFrame
+				window.setInterval(function captionatorHighResProcessor() {
 					try {
-						videoElement.tracks.forEach(function(track) {
+						renderer.tracks.forEach(function(track) {
 							track.activeCues.refreshCues.apply(track.activeCues);
 						});
 					} catch(error) {}
-				
-					// External renderer?
-					if (options.renderer instanceof Function) {
-						options.renderer.call(captionator,videoElement);
-					} else {
-						rebuildCaptions(videoElement);
-					}
-				
-					synchroniseMediaElements(videoElement);
-				}, false);
-
-				window.addEventListener("resize", function(eventData) {
-					videoElement._captionator_dirtyBit = true; // mark video as dirty, force captionator to rerender captions
-					rebuildCaptions(videoElement);
-				},false);
-			
-				videoElement.addEventListener("play", function(eventData){
-					synchroniseMediaElements(videoElement);	
-				},false);
-			
-				videoElement.addEventListener("pause", function(eventData){
-					synchroniseMediaElements(videoElement);	
-				},false);
-
-				// Hires mode
-				if (options.enableHighResolution === true) {
-					window.setInterval(function captionatorHighResProcessor() {
-						try {
-							videoElement.tracks.forEach(function(track) {
-								track.activeCues.refreshCues.apply(track.activeCues);
-							});
-						} catch(error) {}
-					
-						// External renderer?
-						if (options.renderer instanceof Function) {
-							options.renderer.call(captionator,videoElement);
-						} else {
-							rebuildCaptions(videoElement);
-						}
-					},20);
-				}
+					rebuildCaptions(renderer);
+				},20);
 			}
 		
 			return videoElement;
@@ -939,9 +849,10 @@ var Captionator = (function() {
 				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
 			}
 		}
-		return function(videoElement) {
-			var trackList = videoElement.tracks || [];
-			var options = videoElement._captionatorOptions instanceof Object ? videoElement._captionatorOptions : {};
+		return function(renderer) {
+			var videoElement = renderer.element;
+			var trackList = renderer.tracks || [];
+			var options = renderer.options;
 			var currentTime = videoElement.currentTime;
 			var compositeActiveCues = [];
 			var cuesChanged = false;
@@ -960,11 +871,7 @@ var Captionator = (function() {
 					// we sort active cues within each track so that older ones are rendered first.
 					
 					cueSortArray = cueSortArray.sort(function(cueA, cueB) {
-						if (cueA.startTime > cueB.startTime) {
-							return -1;
-						} else {
-							return 1;
-						}
+						return (cueA.startTime > cueB.startTime)? -1 : 1;
 					});
 					
 					compositeActiveCues = compositeActiveCues.concat(cueSortArray);
@@ -973,22 +880,22 @@ var Captionator = (function() {
 
 			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
 			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + "." + cue.id + ":" + cue.text.toString(currentTime).length;});
-			cuesChanged = !compareArray(activeCueIDs,videoElement._captionator_previousActiveCues);
+			cuesChanged = !compareArray(activeCueIDs,renderer.previousActiveCues);
 		
 			// If they've changed, we re-render our cue canvas.
-			if (cuesChanged || videoElement._captionator_dirtyBit) {
+			if (cuesChanged || renderer.dirtyBit) {
 				// If dirty bit was set, it certainly isn't now.
-				videoElement._captionator_dirtyBit = false;
+				renderer.dirtyBit = false;
 
 				// Destroy internal tracking variable (which is used for caption rendering)
-				videoElement._captionator_availableCueArea = null;
+				renderer.availableCueArea = null;
 				
 				// Internal tracking variable to determine whether our composite active cue list for the video has changed
-				videoElement._captionator_previousActiveCues = activeCueIDs;
+				renderer.previousActiveCues = activeCueIDs;
 				
 				// Get the canvas ready if it isn't already
 				styleCueCanvas(videoElement);
-				videoElement._containerObject.innerHTML = "";
+				renderer.containerObject.innerHTML = "";
 			
 				// Now we render the cues
 				compositeActiveCues.forEach(function(cue) {
@@ -996,7 +903,7 @@ var Captionator = (function() {
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
 					cueNode.innerHTML = cue.text.toString(currentTime);
-					videoElement._containerObject.appendChild(cueNode);
+					renderer.containerObject.appendChild(cueNode);
 					styleCue(cueNode,cue,videoElement);
 				});
 			}
@@ -1819,7 +1726,20 @@ var Captionator = (function() {
 		RETURNS:False on immediate failure due to input being malformed, otherwise true (even if the process fails later.)
 		Because of the asynchronous download requirements, this function can't really return anything meaningful.
 	*/
-	var captionify = (function(){
+	var CaptionRenderer = (function(){
+		var textKinds = {
+				// WHATWG SPEC
+				"subtitles":true,
+				"captions":true,
+				"descriptions":true,
+				"metadata":true,
+				"chapters":true,
+				 // CAPTIONATOR TEXT EXTENSIONS
+				"karaoke":true,
+				"lyrics":true,
+				"tickertext":true
+			};
+	
 		/*	Subclassing DOMException so we can reliably throw it without browser intervention. This is quite hacky. See SO post:
 			http://stackoverflow.com/questions/5136727/manually-artificially-throwing-a-domexception-with-javascript
 		*/
@@ -1835,122 +1755,55 @@ var Captionator = (function() {
 			}
 		}
 		
-		return function(element,defaultLanguage,options) {
-			var videoElements = [], elementIndex = 0;
+		function CaptionRenderer(element,defaultLanguage,options) {
+			if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,defaultLanguage,options); }
 			options = options instanceof Object? options : {};
-
+			this.options = options;
+			this.tracks = [];
+			this.mediaTracks = [];
+			this.element = element;
+			element.classList.add("captioned");
 			// Override defaults if options are present...
-			if (options.minimumFontSize && typeof(options.minimumFontSize) === "number") {
+			if (typeof(options.minimumFontSize) === "number") {
 				minimumFontSize = options.minimumFontSize;
 			}
-
-			if (options.minimumLineHeight && typeof(options.minimumLineHeight) === "number") {
+			if (typeof(options.minimumLineHeight) === "number") {
 				minimumLineHeight = options.minimumLineHeight;
 			}
-			
-			if (options.fontSizeVerticalPercentage && typeof(options.fontSizeVerticalPercentage) === "number") {
+			if (typeof(options.fontSizeVerticalPercentage) === "number") {
 				fontSizeVerticalPercentage = options.fontSizeVerticalPercentage;
 			}
-			
-			if (options.lineHeightRatio && typeof(options.lineHeightRatio) !== "number") {
+			if (typeof(options.lineHeightRatio) !== "number") {
 				lineHeightRatio = options.lineHeightRatio;
 			}
-
-			if (options.cueBackgroundColour && options.cueBackgroundColour instanceof Array) {
+			if (options.cueBackgroundColour instanceof Array) {
 				cueBackgroundColour = options.cueBackgroundColour;
 			}
-			
-			/* Feature detection block *
-			if (!HTMLVideoElement) {
-				// Browser doesn't support HTML5 video - die here.
-				return false;
-			} else {
-				// Browser supports native track API
-				if (typeof(document.createElement("video").addTextTrack) === "function") {
-					return false;
-				}
-			}*/
-		
-			[].slice.call(document.getElementsByTagName("video"),0).forEach(function(videoElement) {
-				videoElement.addTextTrack = function(id,kind,label,language,src,type,isDefault) {
-					var allowedKinds = ["subtitles","captions","descriptions","captions","metadata","chapters", // WHATWG SPEC
-										"karaoke","lyrics","tickertext", // CAPTIONATOR TEXT EXTENSIONS
-										"audiodescription","commentary", // CAPTIONATOR AUDIO EXTENSIONS
-										"alternate","signlanguage"]; // CAPTIONATOR VIDEO EXTENSIONS
-				
-					var textKinds = allowedKinds.slice(0,7);
-					var newTrack;
-					id = typeof(id) === "string" ? id : "";
-					label = typeof(label) === "string" ? label : "";
-					language = typeof(language) === "string" ? language : "";
-					isDefault = typeof(isDefault) === "boolean" ? isDefault : false; // Is this track set as the default?
-
-					// If the kind isn't known, throw DOM syntax error exception
-					if (!allowedKinds.filter(function (currentKind){
-							return kind === currentKind ? true : false;
-						}).length) {
-						throw createDOMException(12,"DOMException 12: SYNTAX_ERR: You must use a valid kind when creating a TimedTextTrack.","SYNTAX_ERR");
-					}
-
-					if (textKinds.filter(function (currentKind){
-							return kind === currentKind ? true : false;
-						}).length) {
-						newTrack = new TextTrack(id,kind,label,language,src,null);
-						if (newTrack) {
-							if (!(videoElement.tracks instanceof Array)) {
-								videoElement.tracks = [];
-							}
-
-							videoElement.tracks.push(newTrack);
-							return newTrack;
-						} else {
-							return false;
-						}
-					} else {
-						newTrack = new MediaTrack(id,kind,label,language,src,type,isDefault);
-						if (newTrack) {
-							if (!(videoElement.mediaTracks instanceof Array)) {
-								videoElement.mediaTracks = [];
-							}
-
-							videoElement.mediaTracks.push(newTrack);
-							return newTrack;
-						} else {
-							return false;
-						}
-					}
-				};
-			});
-		
-		
-			if (!element || element === false || element === undefined || element === null) {
-				videoElements = [].slice.call(document.getElementsByTagName("video"),0); // select and convert to array
-			} else {
-				if (element instanceof Array) {
-					for (elementIndex = 0; elementIndex < element.length; elementIndex ++) {
-						if (typeof(element[elementIndex]) === "string") {
-							videoElements = videoElements.concat([].slice.call(document.querySelectorAll(element[elementIndex]),0)); // select and convert to array
-						} else if (element[elementIndex].constructor === HTMLVideoElement) {
-							videoElements.push(element[elementIndex]);
-						}
-					}
-				} else if (typeof(element) === "string") {
-					videoElements = [].slice.call(document.querySelectorAll(element),0); // select and convert to array
-				} else if (element.constructor === HTMLVideoElement) {
-					videoElements.push(element);
-				}
-			}
-		
-			if (videoElements.length) {
-				for (elementIndex = 0; elementIndex < videoElements.length; elementIndex ++) {
-					processVideoElement(videoElements[elementIndex],defaultLanguage,options);
-				}
-				return true;
-			} else {
-				return false;
-			}
+			processVideoElement(this,defaultLanguage,options);
 		}
+		
+		CaptionRenderer.prototype.addTextTrack = function(id,kind,label,language,src,type,isDefault) {
+			var newTrack;
+			id = typeof(id) === "string" ? id : "";
+			label = typeof(label) === "string" ? label : "";
+			language = typeof(language) === "string" ? language : "";
+			isDefault = typeof(isDefault) === "boolean" ? isDefault : false; // Is this track set as the default?
+
+			// If the kind isn't known, throw DOM syntax error exception
+			if(textKinds.hasOwnProperty(kind)){
+				newTrack = new TextTrack(id,kind,label,language,src,isDefault);
+				if (newTrack) {
+					this.tracks.push(newTrack);
+					return newTrack;
+				}
+				return false;
+			}
+			
+			throw createDOMException(12,"DOMException 12: SYNTAX_ERR: You must use a valid kind when creating a TimedTextTrack.","SYNTAX_ERR");
+		};
+		
+		return CaptionRenderer;
 	}());
 		
-	return captionify;
+	return CaptionRenderer;
 })();
