@@ -1483,10 +1483,11 @@ var CaptionRenderer = (function() {
 				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
 			}
 		}
-		return function() {
-			var videoElement = renderer.element;
-			var trackList = renderer.tracks || [];
-			var options = renderer.options;
+		return function(dirtyBit) {
+			var that = this;
+			var videoElement = this.element;
+			var trackList = this.tracks;
+			var options = this.options;
 			var currentTime = videoElement.currentTime;
 			var compositeActiveCues = [];
 			var activeCueIDs = [];
@@ -1534,8 +1535,8 @@ var CaptionRenderer = (function() {
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
 					cueNode.innerHTML = cue.text.toString(currentTime);
-					this.containerObject.appendChild(cueNode);
-					styleCue(cueNode,cue,this);
+					that.containerObject.appendChild(cueNode);
+					styleCue(cueNode,cue,that);
 				});
 			}
 		}
