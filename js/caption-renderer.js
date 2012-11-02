@@ -12,20 +12,40 @@
 var CaptionRenderer = (function() {
 	"use strict";
 	
-	//	Variables you might want to tweak
-	var minimumFontSize = 10;				//	We don't want the type getting any smaller than this.
-	var minimumLineHeight = 16;				//	As above, in points
-	var fontSizeVerticalPercentage = 4.5;	//	Caption font size is 4.5% of the video height
-	var lineHeightRatio = 1.5;				//	Caption line height is 1.3 times the font size
-	var cueBackgroundColour	= [0,0,0,0.5];	//	R,G,B,A
-	
 	// As defined by http://www.whatwg.org/specs/web-apps/current-work/multipage/video.html
 	var TextTrack = (function(){
+		var textKinds = {
+			// WHATWG SPEC
+			"subtitles":true,
+			"captions":true,
+			"descriptions":true,
+			"metadata":true,
+			"chapters":true,
+			 // CAPTIONATOR TEXT EXTENSIONS
+			"karaoke":true,
+			"lyrics":true,
+			"tickertext":true
+		};
+	
+		/*	Subclassing DOMException so we can reliably throw it without browser intervention. This is quite hacky. See SO post:
+			http://stackoverflow.com/questions/5136727/manually-artificially-throwing-a-domexception-with-javascript
+		*/
+		function createDOMException(code,message,name) {
+			try {
+				//	Deliberately cause a DOMException error
+				document.querySelectorAll("div/[]");
+			} catch(Error) {
+				//	Catch it and subclass it
+				var CustomDOMException = function CustomDOMException(code,message,name){ this.code = code; this.message = message; this.name = name; };
+				CustomDOMException.prototype = Error;
+				return new CustomDOMException(code,message,name);
+			}
+		}
 		function loadTrackReadyState(trackElement, callback, eventData) {
 			var captionData;
 			if (this.readyState === 4) {
 				if(this.status === 200) {
-					var TrackProcessingOptions = trackElement.videoNode._captionatorOptions || {};
+					var TrackProcessingOptions = trackElement.renderer.options || {};
 					if (trackElement.kind === "metadata") {
 						// People can load whatever data they please into metadata tracks.
 						// Don't process it.
@@ -37,8 +57,7 @@ var CaptionRenderer = (function() {
 					trackElement.readyState = TextTrack.LOADED;
 					trackElement.cues.loadCues(captionData);
 					trackElement.activeCues.refreshCues.apply(trackElement.activeCues);
-					trackElement.videoNode._captionator_dirtyBit = true;
-					rebuildCaptions(trackElement.videoNode);
+					trackElement.renderer.rebuildCaptions(true);
 					trackElement.onload.call(this);
 				
 					if (callback instanceof Function) {
@@ -53,7 +72,15 @@ var CaptionRenderer = (function() {
 		}
 		
 		function TextTrack(id,kind,label,language,trackSource,isDefault) {
-			var internalMode = TextTrack.OFF, internalDefault = isDefault || false;
+			var internalMode = TextTrack.OFF,
+				internalDefault = isDefault || false,
+				currentTime = 0;
+				
+			// If the kind isn't known, throw DOM syntax error exception
+			if(!textKinds.hasOwnProperty(kind)){
+				throw createDOMException(12,"DOMException 12: SYNTAX_ERR: You must use a valid kind when creating a TimedTextTrack.","SYNTAX_ERR");
+			}
+			
 			this.id = id || "";
 			this.cues = new TextTrackCueList(this);
 			this.activeCues = new ActiveTextTrackCueList(this.cues,this);
@@ -65,6 +92,7 @@ var CaptionRenderer = (function() {
 		
 			this.getMode = function() { return internalMode; };
 			this.getDefault = function() { return internalDefault; };
+			this.getCurrentTime = function(){ return currentTime; };
 		
 			this.setMode = function(value) {
 				var allowedModes = [TextTrack.OFF,TextTrack.HIDDEN,TextTrack.SHOWING], containerID, container;
@@ -77,34 +105,25 @@ var CaptionRenderer = (function() {
 						}
 						
 						// Refresh all captions on video
-						this.videoNode._captionator_dirtyBit = true;
-						rebuildCaptions(this.videoNode);
-					
-						if (value === TextTrack.OFF) {
-							// make sure the resource is reloaded next time (Is this correct behaviour?)
-							this.cues.length = 0; // Destroy existing cue data (bugfix)
-							this.readyState = TextTrack.NONE;
-						}
+						this.renderer.rebuildCaptions(true);
 					}
 				} else {
 					throw new Error("Illegal mode value for track: " + value);
 				}
 			};
 		
+			this.setCurrentTime = function(val){
+				currentTime = val;
+				this.activeCues.refreshCues();
+			};
 		
-			if (Object.prototype.__defineGetter__) {
-				this.__defineGetter__("mode", this.getMode);
-				this.__defineSetter__("mode", this.setMode);
-				this.__defineGetter__("default", this.getDefault);
-			} else if (Object.defineProperty) {
-				Object.defineProperty(this,"mode",
-					{get: this.getMode, set: this.setMode}
-				);
-				Object.defineProperty(this,"default",
-					{get: this.getDefault}
-				);
-			}
+			Object.defineProperties(this,{
+				mode: {get: this.getMode, set: this.setMode},
+				currentTime: {get: this.getCurrentTime, set: this.setCurrentTime},
+				"default": {get: this.getDefault}
+			});
 		}
+		
 		// Define constants for TextTrack.readyState
 		TextTrack.NONE = 0;
 		TextTrack.LOADING = 1;
@@ -236,7 +255,6 @@ var CaptionRenderer = (function() {
 	var TextTrackCue = (function(){
 		function TextTrackCue(id, startTime, endTime, text, settings, pauseOnExit, track) {
 			var wasActive = false;
-			// Set up internal data store
 			this.id = id;
 			this.track = track instanceof TextTrack ? track : null;
 			this.startTime = parseFloat(startTime);
@@ -295,13 +313,12 @@ var CaptionRenderer = (function() {
 			this.snapToLines = !this.linePosition.match(/\%/);
 
 			this.isActive = function() {
-				var currentTime = 0,
+				var currentTime,
 					track = this.track;
 				if (track instanceof TextTrack) {
 					if ((track.mode === TextTrack.SHOWING || track.mode === TextTrack.HIDDEN) && track.readyState === TextTrack.LOADED) {
 						try {
-							currentTime = track.videoNode.currentTime;
-							
+							currentTime = track.currentTime;
 							if (this.startTime <= currentTime && this.endTime >= currentTime) {
 								// Fire enter event if we were not active and now are
 								if (!wasActive) {
@@ -326,13 +343,9 @@ var CaptionRenderer = (function() {
 				return false;
 			};
 
-			if (Object.prototype.__defineGetter__) {
-				this.__defineGetter__("active", this.isActive);
-			} else if (Object.defineProperty) {
-				Object.defineProperty(this,"active",
-					{get: this.isActive}
-				);
-			}
+			Object.defineProperties(this,{
+				active: {get: this.isActive}
+			});
 		};
 		TextTrackCue.prototype.toString = function toString() {
 			return "TextTrackCue:" + this.id + "\n" + String(this.text);
@@ -360,158 +373,6 @@ var CaptionRenderer = (function() {
 		};
 		
 		return TextTrackCue;
-	}());
-	// Captionator media extensions
-	var MediaTrack = (function(){
-		function getSupportedMediaSource(sources) {
-			//	Thanks Mr Pilgrim! :)
-			return sources
-				.filter(function(source,index) {
-					try {
-						var mediaElement = document.createElement(source.getAttribute("type").split("/").shift());
-						return !!(mediaElement.canPlayType && mediaElement.canPlayType(source.getAttribute("type")).replace(/no/, ''));
-					} catch(Error) {
-						//	(The type fragment before the / probably didn't match to 'video' or 'audio'. So... we don't support it.)
-						return false;
-					}
-				})
-				.shift()
-				.getAttribute("src");
-		}
-		function MediaTrack(id,kind,label,language,src,type,isDefault) {
-			// This function is under construction!
-			// Eventually, the idea is that captionator will support timed video and audio tracks in addition to text subtitles
-			var internalMode = TextTrack.OFF;
-			this.id = id || "";
-			this.mediaElement = null;
-			this.kind = kind || "audiodescription";
-			this.label = label || "";
-			this.language = language || "";
-			this.readyState = TextTrack.NONE;
-			this.type = type || "x/unknown"; //	MIME type
-			this.mediaType = null;
-			this.src = "";
-
-			if (typeof(src) === "string") {
-				this.src = src;
-			} else if (src instanceof NodeList) {
-				this.src = getSupportedMediaSource(src);
-			}
-
-			if (this.type.match(/^video\//)) {
-				this.mediaType = "video";
-			} else if (this.type.match(/^audio\//)) {
-				this.mediaType = "audio";
-			}
-
-			//	Create getters and setters for mode
-			this.getMode = function() { return internalMode; };
-
-			this.setMode = function(value) {
-				var allowedModes = [TextTrack.OFF,TextTrack.HIDDEN,TextTrack.SHOWING], containerID, container;
-				if (allowedModes.indexOf(value) !== -1) {
-					if (value !== this.internalMode) {
-						internalMode = value;
-						if (value === TextTrack.HIDDEN && !this.mediaElement) {
-							this.buildMediaElement();
-						}
-				
-						if (value === TextTrack.SHOWING) {
-							this.showMediaElement();
-						}
-				
-						if (value === TextTrack.OFF || value === TextTrack.HIDDEN) {
-							this.hideMediaElement();
-						}
-					}
-				} else {
-					throw new Error("Illegal mode value for track.");
-				}
-			};
-
-			if (Object.prototype.__defineGetter__) {
-				this.__defineGetter__("mode", this.getMode);
-				this.__defineSetter__("mode", this.setMode);
-			} else if (Object.defineProperty) {
-				Object.defineProperty(this,"mode",
-					{get: this.getMode, set: this.setMode}
-				);
-			}
-		}
-		
-		MediaTrack.prototype.onload = function () {};
-		MediaTrack.prototype.onerror = function() {};
-		MediaTrack.prototype.hideMediaElement = function() {
-			if (this.mediaElement) {
-				if (!this.mediaElement.paused) {
-					this.mediaElement.pause();
-				}
-		
-				if (this.mediaElement instanceof HTMLVideoElement) {
-					this.mediaElement.style.display = "none";
-				}
-			}
-		};
-		MediaTrack.prototype.showMediaElement = function() {
-			if (!this.mediaElement) {
-				this.buildMediaElement();
-				document.body.appendChild(this.mediaElement);
-			} else {
-				if (!this.mediaElement.parentNode) {
-					document.body.appendChild(this.mediaElement);
-				}
-		
-				if (this.mediaElement instanceof HTMLVideoElement) {
-					this.mediaElement.style.display = "block";
-				}
-			}
-		};
-
-		MediaTrack.prototype.buildMediaElement = function() {
-			try {
-				if (this.type.match(/^video\//)) {
-					this.mediaElement = document.createElement("video");
-					this.mediaElement.className = "captionator-mediaElement-" + this.kind;
-					styleNode(this.mediaElement,this.kind,this.videoNode);
-				} else if (this.type.match(/^audio\//)) {
-					this.mediaElement = new Audio();
-				}
-		
-				this.mediaElement.type = this.type;
-				this.mediaElement.src = this.src;
-				this.mediaElement.load();
-				this.mediaElement.trackObject = this;
-				this.readyState = TextTrack.LOADING;
-				var mediaElement = this.mediaElement;
-		
-				this.mediaElement.addEventListener("progress",function(eventData) {
-					mediaElement.trackObject.readyState = TextTrack.LOADING;
-				},false);
-		
-				this.mediaElement.addEventListener("canplaythrough",function(eventData) {
-					mediaElement.trackObject.readyState = TextTrack.LOADED;
-					mediaElement.trackObject.onload.call(mediaElement.trackObject);
-				},false);
-		
-				this.mediaElement.addEventListener("error",function(eventData) {
-					mediaElement.trackObject.readyState = TextTrack.ERROR;
-					mediaElement.trackObject.mode = TextTrack.OFF;
-					mediaElement.trackObject.mediaElement = null;
-					mediaElement.trackObject.onerror.call(mediaElement.trackObject,eventData);
-				},false);
-		
-			} catch(Error) {
-				this.readyState = TextTrack.ERROR;
-				this.mode = TextTrack.OFF;
-				this.mediaElement = null;
-
-				if (this.onerror) {
-					this.onerror.apply(this,Error);
-				}
-			}
-		};
-		
-		return MediaTrack;
 	}());
 	// Captionator internal cue structure object
 	function CaptionatorCueStructure(cueSource,options) {
@@ -580,335 +441,6 @@ var CaptionRenderer = (function() {
 		};
 	};
 	CaptionatorCueStructure.prototype = [];
-	/* processVideoElement(videoElement <HTMLVideoElement>,
-							[defaultLanguage - string in BCP47],
-							[options - JS Object])
-
-		Processes track items within an HTMLVideoElement. The second and third parameter are both optional.
-		First parameter: Mandatory HTMLVideoElement object.
-		Second parameter: BCP-47 string for default language. If this parameter is omitted, the User Agent's language
-		will be used to choose a track.
-		Third parameter: as yet unused - will implement animation settings and some other global options with this
-		parameter later.
-		RETURNS: Reference to the HTMLVideoElement.	
-	*/
-	var processVideoElement = (function(){
-		var counter = 0;
-		function generateID() {
-			counter++;
-			return String("captionator")+counter.toString(36);
-		}
-		return function(renderer,defaultLanguage,options) {
-			var trackList = [],
-				videoElement = renderer.element;
-			var language = navigator.language || navigator.userLanguage;
-			var globalLanguage = defaultLanguage || language.split("-")[0];
-			options = options instanceof Object? options : {};
-
-			var enabledDefaultTrack = false;
-			[].slice.call(videoElement.querySelectorAll("track"),0).forEach(function(trackElement) {
-				var sources = (trackElement.querySelectorAll("source").length > 0)
-								?trackElement.querySelectorAll("source")
-								:trackElement.getAttribute("src");			
-				var trackObject = renderer.addTextTrack(
-										(trackElement.getAttribute("id")||generateID()),
-										trackElement.getAttribute("kind"),
-										trackElement.getAttribute("label"),
-										trackElement.getAttribute("srclang").split("-")[0],
-										sources,
-										trackElement.getAttribute("type"),
-										trackElement.hasAttribute("default"));
-			
-				trackElement.track = trackObject;
-				trackObject.trackNode = trackElement;
-				trackObject.videoNode = videoElement;
-				trackList.push(trackObject);
-			
-				// Now determine whether the track is visible by default.
-				// The comments in this section come straight from the spec...
-				var trackEnabled = false;
-			
-				// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
-				// with this text track kind, text track language, and text track label enabled, and there is no other text track
-				// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
-				// ---> Let the text track mode be showing.
-				if ((trackObject.kind === "subtitles" || trackObject.kind === "captions") &&
-					(defaultLanguage === trackObject.language && options.enableCaptionsByDefault)) {
-					if (!trackList.filter(function(trackObject) {
-							if ((trackObject.kind === "captions" || trackObject.kind === "subtitles") && defaultLanguage === trackObject.language && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
-				// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
-				// kind of chapters whose text track mode is showing
-				// ---> Let the text track mode be showing.
-				if (trackObject.kind === "chapters" && (defaultLanguage === trackObject.language)) {
-					if (!trackList.filter(function(trackObject) {
-							if (trackObject.kind === "chapters" && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
-				// with this text track language and text track label enabled, and there is no other text track in the media element's
-				// list of text tracks with a text track kind of descriptions whose text track mode is showing
-				if (trackObject.kind === "descriptions" && (options.enableDescriptionsByDefault === true) && (defaultLanguage === trackObject.language)) {
-					if (!trackList.filter(function(trackObject) {
-							if (trackObject.kind === "descriptions" && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
-				// the user agent must furthermore change that text track's text track mode to hidden.
-				if (trackEnabled === true) {
-					trackList.forEach(function(trackObject) {
-						if(trackObject.trackNode.hasAttribute("default") && trackObject.mode === TextTrack.SHOWING) {
-							trackObject.mode = TextTrack.HIDDEN;
-						}
-					});
-				}
-			
-				// If the track element has a default attribute specified, and there is no other text track in the media element's
-				// list of text tracks whose text track mode is showing or showing by default
-				// Let the text track mode be showing by default.
-				if (trackElement.hasAttribute("default")) {
-					if (!trackList.filter(function(trackObject) {
-							return (trackObject.trackNode.hasAttribute("default") && trackObject.trackNode !== trackElement);
-						}).length) {
-						trackEnabled = true;
-						trackObject.internalDefault = true;
-					}
-				}
-			
-				// Otherwise
-				// Let the text track mode be disabled.
-				if (trackEnabled === true) { trackObject.mode = TextTrack.SHOWING; }
-			});
-
-			window.addEventListener("resize", function(eventData) {
-				renderer.dirtyBit = true; // mark video as dirty, force captionator to rerender captions
-				rebuildCaptions(renderer);
-			},false);
-
-			videoElement.addEventListener("timeupdate", function(eventData){
-				// update active cues
-				try {
-					renderer.tracks.forEach(function(track) {
-						track.activeCues.refreshCues.apply(track.activeCues);
-					});
-				} catch(error) {}
-			
-				rebuildCaptions(renderer);
-			}, false);
-			
-			// Hires mode
-			if (options.enableHighResolution === true) {
-				//TODO: use requestAnimationFrame
-				window.setInterval(function captionatorHighResProcessor() {
-					try {
-						renderer.tracks.forEach(function(track) {
-							track.activeCues.refreshCues.apply(track.activeCues);
-						});
-					} catch(error) {}
-					rebuildCaptions(renderer);
-				},20);
-			}
-		
-			return videoElement;
-		}
-	}());
-	/* rebuildCaptions(HTMLVideoElement videoElement)
-		Loops through all the TextTracks for a given element and manages their display (including generation of container elements.)
-		First parameter: HTMLVideoElement object with associated TextTracks	
-	*/
-	var rebuildCaptions = (function(){
-		function compareArray(array1,array2) {
-			var index;
-			if (!(array1 instanceof Array) || !(array2 instanceof Array)) { return false; }
-			if (array1.length !== array2.length) { return false; }
-			for (index in array1) {
-				if (array1.hasOwnProperty(index) && array1[index] !== array2[index]) { return false; }
-			}
-			return true;
-		}
-		/* styleCueCanvas(VideoNode)
-			Styles and positions a canvas (not a <canvas> object - just a div) for displaying cues on a video.
-			If the HTMLVideoElement in question does not have a canvas, one is created for it.
-			First parameter: The HTMLVideoElement for which the cue canvas will be styled/created. This parameter is mandatory.
-		*/
-		function styleCueCanvas(videoElement) {
-			var baseFontSize, baseLineHeight;
-			var containerObject;
-			var containerID;
-			var options = videoElement._captionatorOptions instanceof Object ? videoElement._captionatorOptions : {};
-		
-			if (!(videoElement instanceof HTMLVideoElement)) {
-				throw new Error("Cannot style a cue canvas for a non-video node!");
-			}
-			
-			if (videoElement._containerObject) {
-				containerObject = videoElement._containerObject;
-				containerID = containerObject.id;
-			}
-
-			if (!containerObject) {
-				// visually display captions
-				containerObject = document.createElement("div");
-				containerObject.className = "captionator-cue-canvas";
-				
-				// We can choose to append the canvas to an element other than the body.
-				// If this option is specified, we no longer use the offsetTop/offsetLeft of the video
-				// to define the position, we just inherit it.
-				//
-				// options.appendCueCanvasTo can be an HTMLElement, or a DOM query.
-				// If the query fails, the canvas will be appended to the body as normal.
-				// If the query is successful, the canvas will be appended to the first matched element.
-
-				if (options.appendCueCanvasTo) {
-					var canvasParentNode = null;
-
-					if (options.appendCueCanvasTo instanceof HTMLElement) {
-						canvasParentNode = options.appendCueCanvasTo;
-					} else if (typeof(options.appendCueCanvasTo) === "string") {
-						try {
-							var canvasSearchResult = document.querySelectorAll(options.appendCueCanvasTo);
-							if (canvasSearchResult.length > 0) {
-								canvasParentNode = canvasSearchResult[0];
-							} else { throw null; /* Bounce to catch */ }
-						} catch(error) {
-							canvasParentNode = document.body;
-							options.appendCueCanvasTo = false;
-						}
-					} else {
-						canvasParentNode = document.body;
-						options.appendCueCanvasTo = false;
-					}
-
-					canvasParentNode.appendChild(containerObject);
-				} else {
-					document.body.appendChild(containerObject);
-				}
-
-				videoElement._containerObject = containerObject;
-				// TODO(silvia): we should only do aria-live on descriptions and that doesn't need visual display
-				containerObject.setAttribute("aria-live","polite");
-				containerObject.setAttribute("aria-atomic","true");
-			} else if (!containerObject.parentNode) {
-				document.body.appendChild(containerObject);
-			}
-		
-			// TODO(silvia): we should not really muck with the aria-describedby attribute of the video
-			if (String(videoElement.getAttribute("aria-describedby")).indexOf(containerID) === -1) {
-				var existingValue = videoElement.hasAttribute("aria-describedby") ? videoElement.getAttribute("aria-describedby") + " " : "";
-				videoElement.setAttribute("aria-describedby",existingValue + containerID);
-			}
-		
-			// Set up the cue canvas
-			var videoMetrics = getNodeMetrics(videoElement);
-		
-			// Set up font metrics
-			baseFontSize = ((videoMetrics.height * (fontSizeVerticalPercentage/100))/96)*72;
-			baseFontSize = baseFontSize >= minimumFontSize ? baseFontSize : minimumFontSize;
-			baseLineHeight = Math.floor(baseFontSize * lineHeightRatio);
-			baseLineHeight = baseLineHeight > minimumLineHeight ? baseLineHeight : minimumLineHeight;
-		
-			// Style node!
-			applyStyles(containerObject,{
-				"zIndex": 100,
-				"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
-				"width": videoMetrics.width + "px",
-				"top": (options.appendCueCanvasTo ? 0 : videoMetrics.top) + "px",
-				"left": (options.appendCueCanvasTo ? 0 : videoMetrics.left) + "px",
-				"color": "white",
-				"fontFamily": "Verdana, Helvetica, Arial, sans-serif",
-				"fontSize": baseFontSize + "pt",
-				"lineHeight": baseLineHeight + "pt"
-			});
-		
-			// Defeat a horrid Chrome 10 video bug
-			// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
-			if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
-				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
-			}
-		}
-		return function(renderer) {
-			var videoElement = renderer.element;
-			var trackList = renderer.tracks || [];
-			var options = renderer.options;
-			var currentTime = videoElement.currentTime;
-			var compositeActiveCues = [];
-			var cuesChanged = false;
-			var activeCueIDs = [];
-			var cueSortArray = [];
-
-			// Work out what cues are showing...
-			trackList.forEach(function(track,trackIndex) {
-				if (track.mode === TextTrack.SHOWING && track.readyState === TextTrack.LOADED) {
-					cueSortArray = [].slice.call(track.activeCues,0);
-					
-					// Do a reverse sort
-					// Since the available cue render area is a square which decreases in size
-					// (away from each side of the video) with each successive cue added,
-					// and we want cues which are older to be displayed above cues which are newer,
-					// we sort active cues within each track so that older ones are rendered first.
-					
-					cueSortArray = cueSortArray.sort(function(cueA, cueB) {
-						return (cueA.startTime > cueB.startTime)? -1 : 1;
-					});
-					
-					compositeActiveCues = compositeActiveCues.concat(cueSortArray);
-				}
-			});
-
-			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
-			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + "." + cue.id + ":" + cue.text.toString(currentTime).length;});
-			cuesChanged = !compareArray(activeCueIDs,renderer.previousActiveCues);
-		
-			// If they've changed, we re-render our cue canvas.
-			if (cuesChanged || renderer.dirtyBit) {
-				// If dirty bit was set, it certainly isn't now.
-				renderer.dirtyBit = false;
-
-				// Destroy internal tracking variable (which is used for caption rendering)
-				renderer.availableCueArea = null;
-				
-				// Internal tracking variable to determine whether our composite active cue list for the video has changed
-				renderer.previousActiveCues = activeCueIDs;
-				
-				// Get the canvas ready if it isn't already
-				styleCueCanvas(videoElement);
-				renderer.containerObject.innerHTML = "";
-			
-				// Now we render the cues
-				compositeActiveCues.forEach(function(cue) {
-					var cueNode = document.createElement("div");
-					if(String(cue.id).length){ cueNode.id = cue.id; }
-					cueNode.className = "captionator-cue";
-					cueNode.innerHTML = cue.text.toString(currentTime);
-					renderer.containerObject.appendChild(cueNode);
-					styleCue(cueNode,cue,videoElement);
-				});
-			}
-		}
-	}());
 	/* parseCaptions(string captionData, object options)
 		Accepts and parses caption/subtitle data.
 		First parameter: Entire text data (UTF-8) of the retrieved SRT/WebVTT file. This parameter is mandatory. (really - what did
@@ -924,9 +456,9 @@ var CaptionRenderer = (function() {
 		var SRTChunkTimestampParser		= /(\d{2})?:?(\d{2}):(\d{2})[\.\,](\d+)/;
 		var GoogleTimestampParser		= /^([\d\.]+)\s+\+([\d\.]+)\s*(.*)/;
 		var LRCTimestampParser			= /^\[(\d{2})?:?(\d{2})\:(\d{2})\.(\d{2})\]\s*(.*?)$/i;
-		var WebVTTDEFAULTSCueParser		= /^(DEFAULTS|DEFAULT)\s+\-\-\>\s+(.*)/g;
-		var WebVTTSTYLECueParser		= /^(STYLE|STYLES)\s+\-\-\>\s*\n([\s\S]*)/g;
-		var WebVTTCOMMENTCueParser		= /^(COMMENT|COMMENTS)\s+\-\-\>\s+(.*)/g;
+		var WebVTTDEFAULTSCueParser		= /^DEFAULTS?\s+\-\-\>\s+(.*)/g;
+		var WebVTTSTYLECueParser		= /^STYLES?\s+\-\-\>\s*\n([\s\S]*)/g;
+		var WebVTTCOMMENTCueParser		= /^COMMENTS?\s+\-\-\>\s+(.*)/g;
 		
 		function hasRealTextContent(textInput) {
 			return !!textInput.replace(/[^a-z0-9]+/ig,"").length;
@@ -1247,37 +779,18 @@ var CaptionRenderer = (function() {
 				rtlDirCheckRe       = new RegExp('^[^'+ltrChars+']*['+rtlChars+']');
 			return !!rtlDirCheckRe.test(text) ? 'rtl' : (!!ltrDirCheckRe.test(text) ? 'ltr' : '');
 		}
-		return function(DOMNode, cueObject, videoElement) {
+		return function(DOMNode, cueObject, renderer) {
 			// Variables for maintaining render calculations
 			var cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cueSize, cueAlignment, cuePaddingLR = 0, cuePaddingTB = 0;
 			var baseFontSize, basePixelFontSize, baseLineHeight, tmpHeightExclusions;
 			var videoHeightInLines, videoWidthInLines, pixelLineHeight, verticalPixelLineHeight, charactersPerLine = 0, characterCount = 0;
 			var characters = 0, lineCount = 0, finalLineCharacterCount = 0, finalLineCharacterHeight = 0, currentLine = 0;
 			var characterX, characterY, characterPosition = 0;
-			var options = videoElement._captionatorOptions || {};
-			var videoMetrics;
+			var options = renderer.options;
 			var maxCueSize = 100, internalTextPosition = 50, textBoundingBoxWidth = 0, textBoundingBoxPercentage = 0, autoSize = true;
-
-			// Set up the cue canvas
-			videoMetrics = getNodeMetrics(videoElement);
-			
-			// Define storage for the available cue area, diminished as further cues are added
-			// Cues occupy the largest possible area they can, either by width or height
-			// (depending on whether the `direction` of the cue is vertical or horizontal)
-			// Cues which have an explicit position set do not detract from this area.
-			// It is the subtitle author's responsibility to ensure they don't overlap if
-			// they decide to override default positioning!
-			
-			if (!videoElement._captionator_availableCueArea) {
-				videoElement._captionator_availableCueArea = {
-					"bottom": (videoMetrics.height-videoMetrics.controlHeight),
-					"right": videoMetrics.width,
-					"top": 0,
-					"left": 0,
-					"height": (videoMetrics.height-videoMetrics.controlHeight),
-					"width": videoMetrics.width
-				};
-			}
+			var videoElement = renderer.element;
+			var videoMetrics = renderer.videoMetrics;
+			var availableCueArea = renderer.availableCueArea;
 
 			if (cueObject.direction === "horizontal") {
 				// Calculate text bounding box
@@ -1290,16 +803,14 @@ var CaptionRenderer = (function() {
 				});
 
 				textBoundingBoxWidth = parseInt(DOMNode.offsetWidth,10);
-				textBoundingBoxPercentage = Math.floor((textBoundingBoxWidth / videoElement._captionator_availableCueArea.width) * 100);
+				textBoundingBoxPercentage = Math.floor((textBoundingBoxWidth / availableCueArea.width) * 100);
 				textBoundingBoxPercentage = textBoundingBoxPercentage <= 100 ? textBoundingBoxPercentage : 100;
 			}
 
 			// Calculate font metrics
-			baseFontSize = ((videoMetrics.height * (fontSizeVerticalPercentage/100))/96)*72;
-			baseFontSize = baseFontSize >= minimumFontSize ? baseFontSize : minimumFontSize;
+			baseFontSize = Math.max(((videoMetrics.height * (options.fontSizeVerticalPercentage/100))/96)*72, options.minimumFontSize);
 			basePixelFontSize = Math.floor((baseFontSize/72)*96);
-			baseLineHeight = Math.floor(baseFontSize * lineHeightRatio);
-			baseLineHeight = baseLineHeight > minimumLineHeight ? baseLineHeight : minimumLineHeight;
+			baseLineHeight = Math.max(Math.floor(baseFontSize * options.lineHeightRatio), options.minimumLineHeight);
 			pixelLineHeight = Math.ceil((baseLineHeight/72)*96);
 			verticalPixelLineHeight	= pixelLineHeight;
 			
@@ -1313,8 +824,8 @@ var CaptionRenderer = (function() {
 			}
 			
 			// Calculate render area height & width in lines
-			videoHeightInLines = Math.floor(videoElement._captionator_availableCueArea.height / pixelLineHeight);
-			videoWidthInLines = Math.floor(videoElement._captionator_availableCueArea.width / verticalPixelLineHeight);
+			videoHeightInLines = Math.floor(availableCueArea.height / pixelLineHeight);
+			videoWidthInLines = Math.floor(availableCueArea.width / verticalPixelLineHeight);
 			
 			// Calculate cue size and padding
 			if (parseFloat(String(cueObject.size).replace(/[^\d\.]/ig,"")) === 0) {
@@ -1358,20 +869,20 @@ var CaptionRenderer = (function() {
 				}
 
 				if (cueObject.snapToLines === true) {
-					cueWidth = videoElement._captionator_availableCueArea.width * (cueSize/100);
+					cueWidth = availableCueArea.width * (cueSize/100);
 				} else {
 					cueWidth = videoMetrics.width * (cueSize/100);
 				}
 
 				if (cueObject.textPosition === "auto") {
-					cueX = ((videoElement._captionator_availableCueArea.right - cueWidth) / 2) + videoElement._captionator_availableCueArea.left;
+					cueX = ((availableCueArea.right - cueWidth) / 2) + availableCueArea.left;
 				} else {
 					internalTextPosition = parseFloat(String(cueObject.textPosition).replace(/[^\d\.]/ig,""));
-					cueX = ((videoElement._captionator_availableCueArea.right - cueWidth) * (internalTextPosition/100)) + videoElement._captionator_availableCueArea.left;
+					cueX = ((availableCueArea.right - cueWidth) * (internalTextPosition/100)) + availableCueArea.left;
 				}
 				
 				if (cueObject.snapToLines === true) {
-					cueY = ((videoHeightInLines-1) * pixelLineHeight) + videoElement._captionator_availableCueArea.top;
+					cueY = ((videoHeightInLines-1) * pixelLineHeight) + availableCueArea.top;
 				} else {
 					tmpHeightExclusions = videoMetrics.controlHeight + pixelLineHeight + (cuePaddingTB*2);
 					cueY = (videoMetrics.height - tmpHeightExclusions) * (cueObject.linePosition/100);
@@ -1379,10 +890,10 @@ var CaptionRenderer = (function() {
 				
 			} else {
 				// Basic positioning
-				cueY = videoElement._captionator_availableCueArea.top;
-				cueX = videoElement._captionator_availableCueArea.right - verticalPixelLineHeight;
+				cueY = availableCueArea.top;
+				cueX = availableCueArea.right - verticalPixelLineHeight;
 				cueWidth = verticalPixelLineHeight;
-				cueHeight = videoElement._captionator_availableCueArea.height * (cueSize/100);
+				cueHeight = availableCueArea.height * (cueSize/100);
 				
 				// Split into characters, and continue calculating width & positioning with new info
 				characterCount = spanify(DOMNode,basePixelFontSize,verticalPixelLineHeight);
@@ -1395,7 +906,7 @@ var CaptionRenderer = (function() {
 				
 				// Work out CueX taking into account linePosition...
 				if (cueObject.snapToLines === true) {
-					cueX = cueObject.direction === "vertical-lr" ? videoElement._captionator_availableCueArea.left : videoElement._captionator_availableCueArea.right - cueWidth;
+					cueX = cueObject.direction === "vertical-lr" ? availableCueArea.left : availableCueArea.right - cueWidth;
 				} else {
 					var temporaryWidthExclusions = cueWidth + (cuePaddingLR * 2);
 					if (cueObject.direction === "vertical-lr") {
@@ -1407,11 +918,11 @@ var CaptionRenderer = (function() {
 				
 				// Work out CueY taking into account textPosition...
 				if (cueObject.textPosition === "auto") {
-					cueY = ((videoElement._captionator_availableCueArea.bottom - cueHeight) / 2) + videoElement._captionator_availableCueArea.top;
+					cueY = ((availableCueArea.bottom - cueHeight) / 2) + availableCueArea.top;
 				} else {
 					cueObject.textPosition = parseFloat(String(cueObject.textPosition).replace(/[^\d\.]/ig,""));
-					cueY = ((videoElement._captionator_availableCueArea.bottom - cueHeight) * (cueObject.textPosition/100)) + 
-							videoElement._captionator_availableCueArea.top;
+					cueY = ((availableCueArea.bottom - cueHeight) * (cueObject.textPosition/100)) + 
+							availableCueArea.top;
 				}
 				
 				
@@ -1467,7 +978,7 @@ var CaptionRenderer = (function() {
 				"left": cueX + "px",
 				"padding": cuePaddingTB + "px " + cuePaddingLR + "px",
 				"textAlign": cueAlignment,
-				"backgroundColor": "rgba(" + cueBackgroundColour.join(",") + ")",
+				"backgroundColor": "rgba(" + options.cueBackgroundColour.join(",") + ")",
 				"direction": checkDirection(String(cueObject.text)),
 				"lineHeight": baseLineHeight + "pt",
 				"boxSizing": "border-box"
@@ -1477,17 +988,17 @@ var CaptionRenderer = (function() {
 				// Work out how to shrink the available render area
 				// If subtracting from the right works out to a larger area, subtract from the right.
 				// Otherwise, subtract from the left.	
-				if (((cueX - videoElement._captionator_availableCueArea.left) - videoElement._captionator_availableCueArea.left) >=
-					(videoElement._captionator_availableCueArea.right - (cueX + cueWidth))) {
+				if (((cueX - availableCueArea.left) - availableCueArea.left) >=
+					(availableCueArea.right - (cueX + cueWidth))) {
 					
-					videoElement._captionator_availableCueArea.right = cueX;
+					availableCueArea.right = cueX;
 				} else {
-					videoElement._captionator_availableCueArea.left = cueX + cueWidth;
+					availableCueArea.left = cueX + cueWidth;
 				}
 				
-				videoElement._captionator_availableCueArea.width =
-					videoElement._captionator_availableCueArea.right - 
-					videoElement._captionator_availableCueArea.left;
+				availableCueArea.width =
+					availableCueArea.right - 
+					availableCueArea.left;
 				
 			} else {
 				// Now shift cue up if required to ensure it's all visible
@@ -1518,20 +1029,17 @@ var CaptionRenderer = (function() {
 				// Work out how to shrink the available render area
 				// If subtracting from the bottom works out to a larger area, subtract from the bottom.
 				// Otherwise, subtract from the top.
-				if (((cueY - videoElement._captionator_availableCueArea.top) - videoElement._captionator_availableCueArea.top) >=
-					(videoElement._captionator_availableCueArea.bottom - (cueY + cueHeight)) &&
-					videoElement._captionator_availableCueArea.bottom > cueY) {
-					
-					videoElement._captionator_availableCueArea.bottom = cueY;
-				} else {
-					if (videoElement._captionator_availableCueArea.top < cueY + cueHeight) {
-						videoElement._captionator_availableCueArea.top = cueY + cueHeight;
-					}
+				if (((cueY - availableCueArea.top) - availableCueArea.top) >=
+					(availableCueArea.bottom - (cueY + cueHeight)) &&
+					availableCueArea.bottom > cueY) {
+					availableCueArea.bottom = cueY;
+				} else if (videoElement._captionator_availableCueArea.top < cueY + cueHeight) {
+					availableCueArea.top = cueY + cueHeight;
 				}
 				
-				videoElement._captionator_availableCueArea.height =
-					videoElement._captionator_availableCueArea.bottom - 
-					videoElement._captionator_availableCueArea.top;
+				availableCueArea.height =
+					availableCueArea.bottom - 
+					availableCueArea.top;
 			}
 			
 			// DEBUG FUNCTIONS
@@ -1542,9 +1050,9 @@ var CaptionRenderer = (function() {
 				var debugCanvas, debugContext;
 				var generateDebugCanvas = function() {
 					if (!debugCanvas) {
-						if (videoElement._captionatorDebugCanvas) {
-							debugCanvas = videoElement._captionatorDebugCanvas;
-							debugContext = videoElement._captionatorDebugContext;
+						if (renderer.captionatorDebugCanvas) {
+							debugCanvas = renderer.captionatorDebugCanvas;
+							debugContext = renderer.captionatorDebugContext;
 						} else {
 							debugCanvas = document.createElement("canvas");
 							debugCanvas.setAttribute("width",videoMetrics.width);
@@ -1560,8 +1068,8 @@ var CaptionRenderer = (function() {
 							});
 					
 							debugContext = debugCanvas.getContext("2d");
-							videoElement._captionatorDebugCanvas = debugCanvas;
-							videoElement._captionatorDebugContext = debugContext;
+							renderer.captionatorDebugCanvas = debugCanvas;
+							renderer.captionatorDebugContext = debugContext;
 						}
 					}
 				};
@@ -1622,10 +1130,10 @@ var CaptionRenderer = (function() {
 					debugContext.fillStyle = "rgba(100,100,255,0.5)";
 					
 					debugContext.fillRect(
-							videoElement._captionator_availableCueArea.left,
-							videoElement._captionator_availableCueArea.top,
-							videoElement._captionator_availableCueArea.right,
-							videoElement._captionator_availableCueArea.bottom);
+							availableCueArea.left,
+							availableCueArea.top,
+							availableCueArea.right,
+							availableCueArea.bottom);
 					debugContext.stroke();
 					
 				};
@@ -1709,10 +1217,163 @@ var CaptionRenderer = (function() {
 				StyleNode.style[styleName] = styleObject[styleName];
 			}
 		}
-	}	
-	/* captionify([selector string array | DOMElement array | selector string | singular dom element ],
+	}
+	/* processVideoElement(videoElement <HTMLVideoElement>,
 							[defaultLanguage - string in BCP47],
 							[options - JS Object])
+
+		Processes track items within an HTMLVideoElement. The second and third parameter are both optional.
+		First parameter: Mandatory HTMLVideoElement object.
+		Second parameter: BCP-47 string for default language. If this parameter is omitted, the User Agent's language
+		will be used to choose a track.
+		Third parameter: as yet unused - will implement animation settings and some other global options with this
+		parameter later.
+		RETURNS: Reference to the HTMLVideoElement.	
+	*/
+	var processVideoElement = (function(){
+		var counter = 0;
+		function generateID() {
+			counter++;
+			return String("captionator")+counter.toString(36);
+		}
+		return function(renderer,defaultLanguage,options) {
+			var trackList = [],
+				videoElement = renderer.element;
+			var language = navigator.language || navigator.userLanguage;
+			var globalLanguage = defaultLanguage || language.split("-")[0];
+			options = options instanceof Object? options : {};
+
+			var enabledDefaultTrack = false;
+			[].slice.call(videoElement.querySelectorAll("track"),0).forEach(function(trackElement) {
+				var sources = (trackElement.querySelectorAll("source").length > 0)
+								?trackElement.querySelectorAll("source")
+								:trackElement.getAttribute("src");			
+				var trackObject = renderer.addTextTrack(
+										(trackElement.getAttribute("id")||generateID()),
+										trackElement.getAttribute("kind"),
+										trackElement.getAttribute("label"),
+										trackElement.getAttribute("srclang").split("-")[0],
+										sources,
+										trackElement.getAttribute("type"),
+										trackElement.hasAttribute("default"));
+			
+				trackElement.track = trackObject;
+				trackObject.trackNode = trackElement;
+				trackObject.renderer = renderer;
+				trackList.push(trackObject);
+			
+				// Now determine whether the track is visible by default.
+				// The comments in this section come straight from the spec...
+				var trackEnabled = false;
+			
+				// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
+				// with this text track kind, text track language, and text track label enabled, and there is no other text track
+				// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				if ((trackObject.kind === "subtitles" || trackObject.kind === "captions") &&
+					(defaultLanguage === trackObject.language && options.enableCaptionsByDefault)) {
+					if (!trackList.filter(function(trackObject) {
+							if ((trackObject.kind === "captions" || trackObject.kind === "subtitles") && defaultLanguage === trackObject.language && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
+							}
+						}).length) {
+						trackEnabled = true;
+					}
+				}
+			
+				// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
+				// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
+				// kind of chapters whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				if (trackObject.kind === "chapters" && (defaultLanguage === trackObject.language)) {
+					if (!trackList.filter(function(trackObject) {
+							if (trackObject.kind === "chapters" && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
+							}
+						}).length) {
+						trackEnabled = true;
+					}
+				}
+			
+				// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
+				// with this text track language and text track label enabled, and there is no other text track in the media element's
+				// list of text tracks with a text track kind of descriptions whose text track mode is showing
+				if (trackObject.kind === "descriptions" && (options.enableDescriptionsByDefault === true) && (defaultLanguage === trackObject.language)) {
+					if (!trackList.filter(function(trackObject) {
+							if (trackObject.kind === "descriptions" && trackObject.mode === TextTrack.SHOWING) {
+								return true;
+							} else {
+								return false;
+							}
+						}).length) {
+						trackEnabled = true;
+					}
+				}
+			
+				// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
+				// the user agent must furthermore change that text track's text track mode to hidden.
+				if (trackEnabled === true) {
+					trackList.forEach(function(trackObject) {
+						if(trackObject.trackNode.hasAttribute("default") && trackObject.mode === TextTrack.SHOWING) {
+							trackObject.mode = TextTrack.HIDDEN;
+						}
+					});
+				}
+			
+				// If the track element has a default attribute specified, and there is no other text track in the media element's
+				// list of text tracks whose text track mode is showing or showing by default
+				// Let the text track mode be showing by default.
+				if (trackElement.hasAttribute("default")) {
+					if (!trackList.filter(function(trackObject) {
+							return (trackObject.trackNode.hasAttribute("default") && trackObject.trackNode !== trackElement);
+						}).length) {
+						trackEnabled = true;
+						trackObject.internalDefault = true;
+					}
+				}
+			
+				// Otherwise
+				// Let the text track mode be disabled.
+				if (trackEnabled === true) { trackObject.mode = TextTrack.SHOWING; }
+			});
+
+			window.addEventListener("resize", function() {
+				renderer.rebuildCaptions(true);
+			},false);
+
+			videoElement.addEventListener("timeupdate", function(){
+				// update active cues
+				try {
+					renderer.tracks.forEach(function(track) {
+						track.currentTime = videoElement.currentTime;
+					});
+				} catch(error) {}
+			
+				renderer.rebuildCaptions(false);
+			}, false);
+			
+			// Hires mode
+			if (options.enableHighResolution === true) {
+				//TODO: use requestAnimationFrame
+				window.setInterval(function captionatorHighResProcessor() {
+					try {
+						renderer.tracks.forEach(function(track) {
+							track.activeCues.refreshCues.apply(track.activeCues);
+						});
+					} catch(error) {}
+					renderer.rebuildCaptions(false);
+				},20);
+			}
+		}
+	}());
+	
+	/* CaptionRenderer([dom element],
+						[defaultLanguage - string in BCP47],
+						[options - JS Object])
 	
 		Adds closed captions to video elements. The first, second and third parameter are both optional.
 		First parameter: Use an array of either DOMElements or selector strings (compatible with querySelectorAll.)
@@ -1720,90 +1381,165 @@ var CaptionRenderer = (function() {
 		present in the DOM will be captioned if tracks are available.
 		Second parameter: BCP-47 string for default language. If this parameter is omitted, the User Agent's language
 		will be used to choose a track.
-		Third parameter: as yet unused - will implement animation settings and some other global options with this
-		parameter later.
-	
-		RETURNS:False on immediate failure due to input being malformed, otherwise true (even if the process fails later.)
-		Because of the asynchronous download requirements, this function can't really return anything meaningful.
 	*/
-	var CaptionRenderer = (function(){
-		var textKinds = {
-				// WHATWG SPEC
-				"subtitles":true,
-				"captions":true,
-				"descriptions":true,
-				"metadata":true,
-				"chapters":true,
-				 // CAPTIONATOR TEXT EXTENSIONS
-				"karaoke":true,
-				"lyrics":true,
-				"tickertext":true
-			};
+	function CaptionRenderer(element,defaultLanguage,options) {
+		if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,defaultLanguage,options); }
+		options = options instanceof Object? options : {};
+		var containerObject = document.createElement("div");
+		containerObject.className = "captionator-cue-canvas";
+		// TODO(silvia): we should only do aria-live on descriptions and that doesn't need visual display
+		containerObject.setAttribute("aria-live","polite");
+		containerObject.setAttribute("aria-atomic","true");
+		
+		this.containerObject = containerObject;
+		this.options = options;
+		this.tracks = [];
+		this.element = element;
+		this.previousActiveCues = "";
+		
+		element.classList.add("captioned");
+		
+		// Apply defaults
+		if (typeof(options.minimumFontSize) !== "number") {
+			options.minimumFontSize = 10; //pt
+		}
+		if (typeof(options.minimumLineHeight) !== "number") {
+			options.minimumLineHeight = 16; //pt
+		}
+		if (typeof(options.fontSizeVerticalPercentage) !== "number") {
+			options.fontSizeVerticalPercentage = 4.5;	//	Caption font size is 4.5% of the video height
+		}
+		if (typeof(options.lineHeightRatio) !== "number") {
+			options.lineHeightRatio = 1.5;				//	Caption line height is 1.3 times the font size
+		}
+		if (!(options.cueBackgroundColour instanceof Array)) {
+			options.cueBackgroundColour = [0,0,0,0.5];	//	R,G,B,A
+		}
+		processVideoElement(this,defaultLanguage,options);
+	}
 	
-		/*	Subclassing DOMException so we can reliably throw it without browser intervention. This is quite hacky. See SO post:
-			http://stackoverflow.com/questions/5136727/manually-artificially-throwing-a-domexception-with-javascript
+	CaptionRenderer.TextTrack = TextTrack;
+	
+	CaptionRenderer.prototype.addTextTrack = function(id,kind,label,language,src,type,isDefault) {
+		var newTrack = new TextTrack(
+			typeof(id) === "string" ? id : "",
+			kind,
+			typeof(label) === "string" ? label : "",
+			typeof(language) === "string" ? language : "",
+			src,
+			typeof(isDefault) === "boolean" ? isDefault : false);
+		if (newTrack) {
+			this.tracks.push(newTrack);
+			return newTrack;
+		}
+		return null;			
+	};
+	
+	CaptionRenderer.prototype.rebuildCaptions = (function(){
+		/* styleCueContainer(renderer)
+			Styles and positions a div for displaying cues on a video.
 		*/
-		function createDOMException(code,message,name) {
-			try {
-				//	Deliberately cause a DOMException error
-				document.querySelectorAll("div/[]");
-			} catch(Error) {
-				//	Catch it and subclass it
-				var CustomDOMException = function CustomDOMException(code,message,name){ this.code = code; this.message = message; this.name = name; };
-				CustomDOMException.prototype = Error;
-				return new CustomDOMException(code,message,name);
-			}
-		}
-		
-		function CaptionRenderer(element,defaultLanguage,options) {
-			if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,defaultLanguage,options); }
-			options = options instanceof Object? options : {};
-			this.options = options;
-			this.tracks = [];
-			this.mediaTracks = [];
-			this.element = element;
-			element.classList.add("captioned");
-			// Override defaults if options are present...
-			if (typeof(options.minimumFontSize) === "number") {
-				minimumFontSize = options.minimumFontSize;
-			}
-			if (typeof(options.minimumLineHeight) === "number") {
-				minimumLineHeight = options.minimumLineHeight;
-			}
-			if (typeof(options.fontSizeVerticalPercentage) === "number") {
-				fontSizeVerticalPercentage = options.fontSizeVerticalPercentage;
-			}
-			if (typeof(options.lineHeightRatio) !== "number") {
-				lineHeightRatio = options.lineHeightRatio;
-			}
-			if (options.cueBackgroundColour instanceof Array) {
-				cueBackgroundColour = options.cueBackgroundColour;
-			}
-			processVideoElement(this,defaultLanguage,options);
-		}
-		
-		CaptionRenderer.prototype.addTextTrack = function(id,kind,label,language,src,type,isDefault) {
-			var newTrack;
-			id = typeof(id) === "string" ? id : "";
-			label = typeof(label) === "string" ? label : "";
-			language = typeof(language) === "string" ? language : "";
-			isDefault = typeof(isDefault) === "boolean" ? isDefault : false; // Is this track set as the default?
-
-			// If the kind isn't known, throw DOM syntax error exception
-			if(textKinds.hasOwnProperty(kind)){
-				newTrack = new TextTrack(id,kind,label,language,src,isDefault);
-				if (newTrack) {
-					this.tracks.push(newTrack);
-					return newTrack;
-				}
-				return false;
-			}
+		function styleCueContainer(renderer) {
+			var containerObject = renderer.containerObject;
+			var containerID = containerObject.id;
+			var options = renderer.options;
+			var videoElement = renderer.element;
+			var videoMetrics, baseFontSize, baseLineHeight;
 			
-			throw createDOMException(12,"DOMException 12: SYNTAX_ERR: You must use a valid kind when creating a TimedTextTrack.","SYNTAX_ERR");
-		};
+			if (!containerObject.parentNode) {
+				((options.appendCueCanvasTo instanceof HTMLElement)
+					?options.appendCueCanvasTo
+					:document.body).appendChild(containerObject);
+			}
 		
-		return CaptionRenderer;
+			// TODO(silvia): we should not really muck with the aria-describedby attribute of the video
+			if (String(videoElement.getAttribute("aria-describedby")).indexOf(containerID) === -1) {
+				videoElement.setAttribute("aria-describedby",videoElement.hasAttribute("aria-describedby") ? videoElement.getAttribute("aria-describedby") + " " : ""+containerID);
+			}
+		
+			// Set up font metrics
+			videoMetrics = getNodeMetrics(videoElement);
+			baseFontSize = Math.max(((videoMetrics.height * (options.fontSizeVerticalPercentage/100))/96)*72,options.minimumFontSize);
+			baseLineHeight = Math.max(Math.floor(baseFontSize * options.lineHeightRatio),options.minimumLineHeight);
+		
+			// Style node!
+			applyStyles(containerObject,{
+				"zIndex": 100,
+				"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
+				"width": videoMetrics.width + "px",
+				"top": (options.appendCueCanvasTo ? 0 : videoMetrics.top) + "px",
+				"left": (options.appendCueCanvasTo ? 0 : videoMetrics.left) + "px",
+				"color": "white",
+				"fontFamily": "Verdana, Helvetica, Arial, sans-serif",
+				"fontSize": baseFontSize + "pt",
+				"lineHeight": baseLineHeight + "pt"
+			});
+		
+			renderer.videoMetrics = videoMetrics;
+			
+			// Defeat a horrid Chrome 10 video bug
+			// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
+			if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
+				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
+			}
+		}
+		return function() {
+			var videoElement = renderer.element;
+			var trackList = renderer.tracks || [];
+			var options = renderer.options;
+			var currentTime = videoElement.currentTime;
+			var compositeActiveCues = [];
+			var activeCueIDs = [];
+
+			// Work out what cues are showing...
+			trackList.forEach(function(track) {
+				if (track.mode === TextTrack.SHOWING && track.readyState === TextTrack.LOADED) {
+					// Do a reverse sort
+					// Since the available cue render area is a square which decreases in size
+					// (away from each side of the video) with each successive cue added,
+					// and we want cues which are older to be displayed above cues which are newer,
+					// we sort active cues within each track so that older ones are rendered first.
+					[].push.apply(compositeActiveCues,[].slice.call(track.activeCues,0).sort(function(cueA, cueB) {
+						return (cueA.startTime > cueB.startTime)? -1 : 1;
+					}));
+				}
+			});
+			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
+			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + "." + cue.id + ":" + cue.text.toString(currentTime).length;}).join('');
+			dirtyBit |= activeCueIDs !== this.previousActiveCues;
+			this.previousActiveCues = activeCueIDs;
+	
+			// If they've changed, we re-render our cue canvas.
+			if (dirtyBit) {				
+				// Get the canvas ready if it isn't already
+				styleCueContainer(this);
+				this.containerObject.innerHTML = "";
+			
+				// Define storage for the available cue area, diminished as further cues are added
+				// Cues occupy the largest possible area they can, either by width or height
+				// (depending on whether the `direction` of the cue is vertical or horizontal)
+				// Cues which have an explicit position set do not detract from this area.
+				this.availableCueArea = {
+					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+					"right": this.videoMetrics.width,
+					"top": 0,
+					"left": 0,
+					"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+					"width": this.videoMetrics.width
+				};
+			
+				// Now we render the cues
+				compositeActiveCues.forEach(function(cue) {
+					var cueNode = document.createElement("div");
+					if(String(cue.id).length){ cueNode.id = cue.id; }
+					cueNode.className = "captionator-cue";
+					cueNode.innerHTML = cue.text.toString(currentTime);
+					this.containerObject.appendChild(cueNode);
+					styleCue(cueNode,cue,this);
+				});
+			}
+		}
 	}());
-		
+	
 	return CaptionRenderer;
 })();

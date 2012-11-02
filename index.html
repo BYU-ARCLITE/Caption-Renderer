@@ -25,21 +25,21 @@
 		<h2>Media Controls</h2>
 
 		<!-- Include Captionator -->
-		<script type="text/javascript" src="js/captionator.js"></script>
+		<script type="text/javascript" src="js/caption-renderer.js"></script>
 		
 		<!-- Example Usage -->
 		<script type="text/javascript" src="js/captionator-example-api.js"></script>
 		<script type="text/javascript">
 			window.addEventListener("load",function() {
 				var videoObject = document.getElementById("videoTest");
-				CaptionRenderer(videoObject,null,{
+				var renderer = CaptionRenderer(videoObject,null,{
 					debugMode: !!window.location.search.match(/debug/i),
 					sizeCuesByTextBoundingBox: !!window.location.search.match(/boundingBox/i),
 					enableHighResolution: !!window.location.search.match(/highres/i),
 				});
 				
 				videoObject.volume = 0;
-				document.body.appendChild(generateMediaControls(videoObject));
+				document.body.appendChild(generateMediaControls(renderer));
 			},false);
 		</script>
 	</body>
