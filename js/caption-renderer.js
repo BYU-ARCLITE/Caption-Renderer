@@ -19,45 +19,35 @@ var CaptionRenderer = (function() {
 		Third Parameter: The HTMLVideoElement with which the cue is associated. This parameter is mandatory.
 	*/
 	var styleCue = (function(){
+		function hasLength(s) { return !!s.length; }
 		// Function to facilitate vertical text alignments in browsers which do not support writing-mode
 		// (sadly, all the good ones!)
 		function spanify(DOMNode,fontSize,lineHeight) {
-			var stringHasLength = function(textString) { return !!textString.length; };
-			var spanCode = "<span class='captionator-cue-character'>";
-			var nodeIndex, currentNode, currentNodeValue, replacementFragment, characterCount = 0;
-			var styleSpan = function(span) {
-				characterCount ++;
-				applyStyles(span,{
-					"height":	fontSize + "px",
-					"width":	lineHeight + "px"
-				});
-			};
-
-			for (nodeIndex in DOMNode.childNodes) {
-				if (DOMNode.childNodes.hasOwnProperty(nodeIndex)) {
-					currentNode = DOMNode.childNodes[nodeIndex];
-					if (currentNode.nodeType === 3) {
-						replacementFragment = document.createDocumentFragment();
-						currentNodeValue = currentNode.nodeValue;
-						
-						replacementFragment.appendChild(document.createElement("span"));
-						
-						replacementFragment.childNodes[0].innerHTML =
-								spanCode +
-								currentNodeValue
-									.split(/(.)/)
-									.filter(stringHasLength)
-									.join("</span>" + spanCode) +
-								"</span>";
-						
-						[].slice.call(replacementFragment.querySelectorAll("span.captionator-cue-character"),0).forEach(styleSpan);
-						
-						currentNode.parentNode.replaceChild(replacementFragment,currentNode);
-					} else if (DOMNode.childNodes[nodeIndex].nodeType === 1) {
-						characterCount += spanify(DOMNode.childNodes[nodeIndex],fontSize,lineHeight);
-					}
+			var characterCount = 0,
+				templateNode = document.createElement('span');
+			templateNode.className = 'captionator-cue-character';
+			applyStyles(templateNode,{
+				"height":	fontSize + "px",
+				"width":	lineHeight + "px"
+			});
+			[].forEach.call(DOMNode.childNodes,function(currentNode,nodeIndex) {
+				var replacementNode;
+				if (currentNode.nodeType === 3) {
+					replacementNode = document.createElement("span");
+					currentNode.nodeValue
+							.split(/(.)/)
+							.filter(hasLength)
+							.forEach(function(s){
+								var span = templateNode.cloneNode(false);
+								span.textContent = s;
+								replacementNode.appendChild(span);
+								characterCount++;
+							});
+					currentNode.parentNode.replaceChild(replacementNode,currentNode);
+				} else if (DOMNode.childNodes[nodeIndex].nodeType === 1) {
+					characterCount += spanify(DOMNode.childNodes[nodeIndex],fontSize,lineHeight);
 				}
-			}
+			});
 			return characterCount;
 		};
 		/* checkDirection(text)
@@ -776,20 +766,18 @@ var CaptionRenderer = (function() {
 			}
 		}
 		return function(dirtyBit) {
-			var that = this;
+			var renderer = this;
 			var videoElement = this.element;
-			var trackList = this.tracks;
 			var options = this.options;
 			var currentTime = videoElement.currentTime;
 			var compositeActiveCues = [];
-			var activeCueIDs = [];
+			var activeCueIDs;
 
 			// Work out what cues are showing...
-			trackList.forEach(function(track) {
+			this.tracks.forEach(function(track) {
 				if (track.mode === TextTrack.SHOWING && track.readyState === TextTrack.LOADED) {
 					// Do a reverse sort
-					// Since the available cue render area is a square which decreases in size
-					// (away from each side of the video) with each successive cue added,
+					// Since the render area decreases in size with each successive cue added,
 					// and we want cues which are older to be displayed above cues which are newer,
 					// we sort active cues within each track so that older ones are rendered first.
 					[].push.apply(compositeActiveCues,[].slice.call(track.activeCues,0).sort(function(cueA, cueB) {
@@ -797,13 +785,12 @@ var CaptionRenderer = (function() {
 					}));
 				}
 			});
+			
 			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
-			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + "." + cue.id + ":" + cue.text.toString(currentTime).length;}).join('');
-			dirtyBit |= activeCueIDs !== this.previousActiveCues;
-			this.previousActiveCues = activeCueIDs;
+			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.toString(currentTime).length;}).join('');
 	
 			// If they've changed, we re-render our cue canvas.
-			if (dirtyBit) {				
+			if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
 				// Get the canvas ready if it isn't already
 				styleCueContainer(this);
 				this.containerObject.innerHTML = "";
@@ -827,10 +814,12 @@ var CaptionRenderer = (function() {
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
 					cueNode.innerHTML = cue.text.toString(currentTime);
-					that.containerObject.appendChild(cueNode);
-					styleCue(cueNode,cue,that);
+					renderer.containerObject.appendChild(cueNode);
+					styleCue(cueNode,cue,renderer);
 				});
 			}
+			
+			this.previousActiveCues = activeCueIDs;
 		}
 	}());
 	
