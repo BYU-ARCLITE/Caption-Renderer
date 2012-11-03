@@ -212,20 +212,15 @@ var TextTrack = (function(){
 			return cueStructure;
 		}
 		
-		return function(captionData, options) {
-			options = options instanceof Object ? options : {};
-			var fileType = "", subtitles = [];
+		return function(mime, captionData, options) {
+			var fileType = "", subtitles;
 			var cueStyles = "";
 			var cueDefaults = [];
-
-			if (!captionData) {
-				throw new Error("Required parameter captionData not supplied.");
-			}
 			
 			// This function takes chunks of text representing cues, and converts them into cue objects.
 			function parseCaptionChunk(subtitleElement,objectCount) {
-				var subtitleParts, timeIn, timeOut, html, timeData, subtitlePartIndex, cueSettings = "", id, specialCueData;
-				var timestampMatch, tmpCue;
+				var subtitleParts, timeIn, timeOut, timeData, cueSettings = "", id, specialCueData;
+				var timestamp, timestampMatch, tmpCue, compositeCueSettings, key;
 
 				// WebVTT Special Cue Logic
 				if ((specialCueData = WebVTTDEFAULTSCueParser.exec(subtitleElement))) {
@@ -254,52 +249,44 @@ var TextTrack = (function(){
 				}
 			
 				if (subtitleParts[0].match(/^\s*[a-z0-9]+\s*$/ig)) {
-					// The identifier becomes the cue ID (when *we* load the cues from file. Programatically created cues can have an ID of whatever.)
 					id = String(subtitleParts.shift().replace(/\s*/ig,""));
 				} else { id = objectCount; }
 			
-				for (subtitlePartIndex = 0; subtitlePartIndex < subtitleParts.length; subtitlePartIndex ++) {
-					var timestamp = subtitleParts[subtitlePartIndex];
+				timestamp = subtitleParts.shift();
+				if ((timestampMatch = SRTTimestampParser.exec(timestamp)) ||
+					(timestampMatch = SUBTimestampParser.exec(timestamp)) ||
+					(timestampMatch = SBVTimestampParser.exec(timestamp))) {
 					
-					if ((timestampMatch = SRTTimestampParser.exec(timestamp)) ||
-						(timestampMatch = SUBTimestampParser.exec(timestamp)) ||
-						(timestampMatch = SBVTimestampParser.exec(timestamp))) {
-						
-						// WebVTT / SRT / SUB (VOBSub) / YouTube SBV style timestamp
-						
-						timeData = timestampMatch.slice(1);
-						
-						timeIn =	parseInt((timeData[0]||0) * 60 * 60,10) +	// Hours
-									parseInt((timeData[1]||0) * 60,10) +		// Minutes
-									parseInt((timeData[2]||0),10) +				// Seconds
-									parseFloat("0." + (timeData[3]||0));		// MS
-						
-						timeOut =	parseInt((timeData[4]||0) * 60 * 60,10) +	// Hours
-									parseInt((timeData[5]||0) * 60,10) +		// Minutes
-									parseInt((timeData[6]||0),10) +				// Seconds
-									parseFloat("0." + (timeData[7]||0));		// MS
-						
-						if (timeData[8]) {
-							cueSettings = timeData[8];
-						}
-				
-					} else if (!!(timestampMatch = GoogleTimestampParser.exec(timestamp))) {
-						// Google's proposed WebVTT timestamp style
-						timeData = timestampMatch.slice(1);
-						timeIn = parseFloat(timeData[0]);
-						timeOut = timeIn + parseFloat(timeData[1]);
-						if (timeData[2]) { cueSettings = timeData[2]; }
+					// WebVTT / SRT / SUB (VOBSub) / YouTube SBV style timestamp
+					
+					timeData = timestampMatch.slice(1);
+					
+					timeIn =	parseInt((timeData[0]||0) * 60 * 60,10) +	// Hours
+								parseInt((timeData[1]||0) * 60,10) +		// Minutes
+								parseInt((timeData[2]||0),10) +				// Seconds
+								parseFloat("0." + (timeData[3]||0));		// MS
+					
+					timeOut =	parseInt((timeData[4]||0) * 60 * 60,10) +	// Hours
+								parseInt((timeData[5]||0) * 60,10) +		// Minutes
+								parseInt((timeData[6]||0),10) +				// Seconds
+								parseFloat("0." + (timeData[7]||0));		// MS
+					
+					if (timeData[8]) {
+						cueSettings = timeData[8];
 					}
-					
-					// We've got the timestamp - return all the other unmatched lines as the raw subtitle data
-					subtitleParts = subtitleParts.slice(0,subtitlePartIndex).concat(subtitleParts.slice(subtitlePartIndex+1));
-					break;
+			
+				} else if (!!(timestampMatch = GoogleTimestampParser.exec(timestamp))) {
+					// Google's proposed WebVTT timestamp style
+					timeData = timestampMatch.slice(1);
+					timeIn = parseFloat(timeData[0]);
+					timeOut = timeIn + parseFloat(timeData[1]);
+					if (timeData[2]) { cueSettings = timeData[2]; }
 				}
 
 				if (!timeIn && !timeOut) { return null; } // Cue is invalid!
 
 				// Consolidate cue settings, convert defaults to object
-				var compositeCueSettings =
+				compositeCueSettings =
 					cueDefaults
 						.reduce(function(previous,current,index,array){
 							previous[current.split(":")[0]] = current.split(":")[1];
@@ -319,14 +306,13 @@ var TextTrack = (function(){
 				
 				// Turn back into string like the TextTrackCue constructor expects
 				cueSettings = "";
-				for (var key in compositeCueSettings) {
+				for (key in compositeCueSettings) {
 					if (compositeCueSettings.hasOwnProperty(key)) {
 						cueSettings += !!cueSettings.length ? " " : "";
 						cueSettings += key + ":" + compositeCueSettings[key];
 					}
 				}
 				
-				// The remaining lines are the subtitle payload itself (after removing an ID if present, and the time);
 				tmpCue = new TextTrackCue(id, timeIn, timeOut, subtitleParts.join("\n"), cueSettings, false, null);
 				tmpCue.styleData = cueStyles;
 				return tmpCue;
@@ -456,10 +442,10 @@ var TextTrack = (function(){
 	};
 	TextTrack.prototype.loadTrack = (function(){
 		function loadTrackReadyState(trackElement, callback, eventData) {
-			var captionData;
+			var captionData, options;
 			if (this.readyState === 4) {
 				if(this.status === 200) {
-					var TrackProcessingOptions = trackElement.renderer.options || {};
+					options = trackElement.renderer.options;
 					if (trackElement.kind === "metadata") {
 						// People can load whatever data they please into metadata tracks.
 						// Don't process it.
@@ -467,7 +453,7 @@ var TextTrack = (function(){
 						TrackProcessingOptions.sanitiseCueHTML = false;
 					}
 					
-					captionData = parseCaptions(this.responseText,TrackProcessingOptions);
+					captionData = parseCaptions(this.getResponseHeader('content-type'),this.responseText,options);
 					trackElement.readyState = TextTrack.LOADED;
 					trackElement.cues.loadCues(captionData);
 					trackElement.activeCues.refreshCues.apply(trackElement.activeCues);
