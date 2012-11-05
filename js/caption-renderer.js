@@ -769,6 +769,7 @@ var CaptionRenderer = (function() {
 			var renderer = this;
 			var videoElement = this.element;
 			var options = this.options;
+			var preprocess = options.preprocess;
 			var currentTime = videoElement.currentTime;
 			var compositeActiveCues = [];
 			var activeCueIDs;
@@ -788,7 +789,7 @@ var CaptionRenderer = (function() {
 			
 			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
 			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.toString(currentTime).length;}).join('');
-	
+			
 			// If they've changed, we re-render our cue canvas.
 			if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
 				// Get the canvas ready if it isn't already
@@ -813,9 +814,9 @@ var CaptionRenderer = (function() {
 					var cueNode = document.createElement("div");
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
-					cueNode.innerHTML = cue.text.toString(currentTime);
+					cueNode.innerHTML = preprocess(cue.text.toString(currentTime));										
 					renderer.containerObject.appendChild(cueNode);
-					styleCue(cueNode,cue,renderer);
+					styleCue(options.styleCue(cueNode),cue,renderer);
 				});
 			}
 			
