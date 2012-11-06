@@ -12,13 +12,13 @@
 var CaptionRenderer = (function() {
 	"use strict";
 
-	/*	styleCue(DOMNode, cueObject, videoNode)
+	/*	positionCue(DOMNode, cueObject, videoNode)
 		Styles and positions cue nodes according to the WebVTT specification.
 		First parameter: The DOMNode representing the cue to style. This parameter is mandatory.
 		Second parameter: The TextTrackCue itself.
 		Third Parameter: The HTMLVideoElement with which the cue is associated. This parameter is mandatory.
 	*/
-	var styleCue = (function(){
+	var positionCue = (function(){
 		function hasLength(s) { return !!s.length; }
 		// Function to facilitate vertical text alignments in browsers which do not support writing-mode
 		// (sadly, all the good ones!)
@@ -656,17 +656,14 @@ var CaptionRenderer = (function() {
 	}());
 	
 	/* CaptionRenderer([dom element],
-						[defaultLanguage - string in BCP47],
 						[options - JS Object])
 	
 		Adds closed captions to video elements. The first, second and third parameter are both optional.
 		First parameter: Use an array of either DOMElements or selector strings (compatible with querySelectorAll.)
 		All of these elements will be captioned if tracks are available. If this parameter is omitted, all video elements
 		present in the DOM will be captioned if tracks are available.
-		Second parameter: BCP-47 string for default language. If this parameter is omitted, the User Agent's language
-		will be used to choose a track.
 	*/
-	function CaptionRenderer(element,defaultLanguage,options) {
+	function CaptionRenderer(element,options) {
 		if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,defaultLanguage,options); }
 		options = options instanceof Object? options : {};
 		var containerObject = document.createElement("div");
@@ -770,6 +767,7 @@ var CaptionRenderer = (function() {
 			var videoElement = this.element;
 			var options = this.options;
 			var preprocess = options.preprocess;
+			var styleCue = options.styleCue;
 			var currentTime = videoElement.currentTime;
 			var compositeActiveCues = [];
 			var activeCueIDs;
@@ -815,8 +813,9 @@ var CaptionRenderer = (function() {
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
 					cueNode.innerHTML = preprocess(cue.text.toString(currentTime));										
+					cueNode = styleCue(cueNode);
+					positionCue(cueNode,cue,renderer);
 					renderer.containerObject.appendChild(cueNode);
-					styleCue(options.styleCue(cueNode),cue,renderer);
 				});
 			}
 			
