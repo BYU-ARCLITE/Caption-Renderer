@@ -39,7 +39,7 @@
 }
 
 q.voice:before {
-	content: attr(title);
+	content: attr(data-voice);
 	color:red;
 	margin-right: 0.5em;
 }

@@ -44,7 +44,7 @@ var generateMediaControls = function(videoElement) {
 											"<td>" + currentTrack.label + "</td>" +
 											"<td>" + currentTrack.language + "</td>" +
 											"<td>" + ["Not Loaded","Loading","Loaded","Error"][currentTrack.readyState] + "</td>" +
-											"<td>" + ["Not Showing","Hidden","Showing"][currentTrack.mode] + "</td>" +
+											"<td>" + currentTrack.mode + "</td>" +
 											"<td></td>";
 						
 						readyStateTD = trackRow.childNodes[trackRow.childNodes.length-3];
@@ -54,20 +54,20 @@ var generateMediaControls = function(videoElement) {
 						trackToggle.type = "checkbox";
 						trackToggle.title = "Toggle track visibility";
 						
-						if (currentTrack.mode === 2) {
+						if (currentTrack.mode === "showing") {
 							trackToggle.checked = true;
 						}
 						
 						toggleTD.appendChild(trackToggle);
 						
 						trackToggle.addEventListener("change",function(eventData) {
-							currentTrack.mode = [0,2][Number(this.checked)];
-							modeTD.innerHTML = ["Not Showing","Hidden","Showing"][currentTrack.mode];
+							currentTrack.mode = ["hidden","showing"][Number(this.checked)];
+							modeTD.innerHTML = currentTrack.mode;
 						},false);
 						
 						currentTrack.onload = function(eventData) {
 							readyStateTD.innerHTML = ["Not Loaded","Loading","Loaded","Error"][currentTrack.readyState];
-							modeTD.innerHTML = ["Not Showing","Hidden","Showing"][currentTrack.mode];
+							modeTD.innerHTML = currentTrack.mode;
 						};
 						currentTrack.onerror = currentTrack.onload;
 					

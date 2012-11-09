@@ -5,10 +5,6 @@
 
 	https://github.com/cgiffard/Captionator
 */
-/*global HTMLVideoElement: true, NodeList: true, Audio: true, HTMLElement: true, document:true, window:true, XMLHttpRequest:true, navigator:true */
-/*jshint strict:true */
-/*Tab indented, tab = 4 spaces*/
-
 var CaptionRenderer = (function() {
 	"use strict";
 
@@ -19,10 +15,9 @@ var CaptionRenderer = (function() {
 		Third Parameter: The HTMLVideoElement with which the cue is associated. This parameter is mandatory.
 	*/
 	var positionCue = (function(){
-		function hasLength(s) { return !!s.length; }
 		// Function to facilitate vertical text alignments in browsers which do not support writing-mode
 		// (sadly, all the good ones!)
-		function spanify(DOMNode,fontSize,lineHeight) {
+		function spanify(DOMNode,fontSize,lineHeight,chars) {
 			var characterCount = 0,
 				templateNode = document.createElement('span');
 			templateNode.className = 'captionator-cue-character';
@@ -36,19 +31,19 @@ var CaptionRenderer = (function() {
 					replacementNode = document.createElement("span");
 					currentNode.nodeValue
 							.split(/(.)/)
-							.filter(hasLength)
 							.forEach(function(s){
-								var span = templateNode.cloneNode(false);
-								span.textContent = s;
-								replacementNode.appendChild(span);
-								characterCount++;
+								if(!s.length){ return; }
+								var ch = templateNode.cloneNode(false);
+								ch.textContent = s;
+								replacementNode.appendChild(ch);
+								chars.push(ch)
 							});
 					currentNode.parentNode.replaceChild(replacementNode,currentNode);
 				} else if (DOMNode.childNodes[nodeIndex].nodeType === 1) {
-					characterCount += spanify(DOMNode.childNodes[nodeIndex],fontSize,lineHeight);
+					spanify(DOMNode.childNodes[nodeIndex],fontSize,lineHeight,chars);
 				}
 			});
-			return characterCount;
+			return chars;
 		};
 		/* checkDirection(text)
 			Determines whether the text string passed into the function is an RTL (right to left) or LTR (left to right) string.
@@ -65,18 +60,17 @@ var CaptionRenderer = (function() {
 		}
 		return function(DOMNode, cueObject, renderer) {
 			// Variables for maintaining render calculations
-			var cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cueSize, cueAlignment, cuePaddingLR = 0, cuePaddingTB = 0;
-			var baseFontSize, basePixelFontSize, baseLineHeight, tmpHeightExclusions;
-			var videoHeightInLines, videoWidthInLines, pixelLineHeight, verticalPixelLineHeight, charactersPerLine = 0, characterCount = 0;
-			var characters = 0, lineCount = 0, finalLineCharacterCount = 0, finalLineCharacterHeight = 0, currentLine = 0;
-			var characterX, characterY, characterPosition = 0;
 			var options = renderer.options;
-			var maxCueSize = 100, internalTextPosition = 50, textBoundingBoxWidth = 0, textBoundingBoxPercentage = 0, autoSize = true;
 			var videoElement = renderer.element;
 			var videoMetrics = renderer.videoMetrics;
+			var cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cuePaddingLR = 0, cuePaddingTB = 0;
+			var cueSize, cueLine, cueVertical = cueObject.vertical, cueSnap = cueObject.snapToLines, cuePosition = cueObject.position;
+			var baseFontSize, basePixelFontSize, baseLineHeight, tmpHeightExclusions;
+			var videoHeightInLines, videoWidthInLines, pixelLineHeight, verticalPixelLineHeight;
+			var maxCueSize = 100, textBoundingBoxWidth = 0, textBoundingBoxPercentage = 0, autoSize = true;
 			var availableCueArea = renderer.availableCueArea;
 
-			if (cueObject.direction === "horizontal") {
+			if (cueVertical === "") {
 				// Calculate text bounding box
 				// (isn't useful for vertical cues, because we're doing all glyph positioning ourselves.)
 				applyStyles(DOMNode,{
@@ -89,8 +83,14 @@ var CaptionRenderer = (function() {
 				textBoundingBoxWidth = parseInt(DOMNode.offsetWidth,10);
 				textBoundingBoxPercentage = Math.floor((textBoundingBoxWidth / availableCueArea.width) * 100);
 				textBoundingBoxPercentage = textBoundingBoxPercentage <= 100 ? textBoundingBoxPercentage : 100;
+				
+				cuePaddingLR = Math.floor(videoMetrics.width * 0.01);
+				cuePaddingTB = 0;
+			}else{
+				cuePaddingLR = 0;
+				cuePaddingTB = Math.floor(videoMetrics.height * 0.01);
 			}
-
+			
 			// Calculate font metrics
 			baseFontSize = Math.max(((videoMetrics.height * (options.fontSizeVerticalPercentage/100))/96)*72, options.minimumFontSize);
 			basePixelFontSize = Math.floor((baseFontSize/72)*96);
@@ -112,147 +112,95 @@ var CaptionRenderer = (function() {
 			videoWidthInLines = Math.floor(availableCueArea.width / verticalPixelLineHeight);
 			
 			// Calculate cue size and padding
-			if (parseFloat(String(cueObject.size).replace(/[^\d\.]/ig,"")) === 0) {
-				// We assume (given a size of 0) that no explicit size was set.
-				// Depending on settings, we either use the WebVTT default size of 100% (the js default behaviour),
-				// or the proportion of the video the text bounding box takes up (widthwise) as a percentage (proposed behaviour, LeanBack's default)
-				if (options.sizeCuesByTextBoundingBox === true) {
-					cueSize = textBoundingBoxPercentage;
-				} else {
-					cueSize = 100;
-					autoSize = false;
-				}
+			if (options.sizeCuesByTextBoundingBox && cueObject.size === 100) {
+				// We assume (given a size of 100) that no explicit size was set.
+				cueSize = textBoundingBoxPercentage;
 			} else {
+				cueSize = cueObject.size;
 				autoSize = false;
-				cueSize = parseFloat(String(cueObject.size).replace(/[^\d\.]/ig,""));
-				cueSize = cueSize <= 100 ? cueSize : 100;
 			}
 			
-			cuePaddingLR = cueObject.direction === "horizontal" ? Math.floor(videoMetrics.width * 0.01) : 0;
-			cuePaddingTB = cueObject.direction === "horizontal" ? 0 : Math.floor(videoMetrics.height * 0.01);
-			
-			if (cueObject.linePosition === "auto") {
-				cueObject.linePosition = cueObject.direction === "horizontal" ? videoHeightInLines : videoWidthInLines;
-			} else if (String(cueObject.linePosition).match(/\%/)) {
-				cueObject.snapToLines = false;
-				cueObject.linePosition = parseFloat(String(cueObject.linePosition).replace(/\%/ig,""));
+			if (cueObject.line === "auto") {
+				cueLine = cueVertical === "" ? videoHeightInLines : videoWidthInLines;
+			} else {
+				cueLine = parseFloat(cueObject.line);
 			}
 			
-			if (cueObject.direction === "horizontal") {
+			if (cueVertical === "") {
 				cueHeight = pixelLineHeight;
 
-				if (cueObject.textPosition !== "auto" && autoSize) {
-					internalTextPosition = parseFloat(String(cueObject.textPosition).replace(/[^\d\.]/ig,""));
-					
-					// Don't squish the text
-					if (cueSize - internalTextPosition > textBoundingBoxPercentage) {
-						cueSize -= internalTextPosition;
-					} else {
-						cueSize = textBoundingBoxPercentage;
-					}
+				if (autoSize) { // Don't squish the text
+					cueSize = (cueSize - cuePosition > textBoundingBoxPercentage)
+								?cueSize-cuePosition:textBoundingBoxPercentage;
 				}
-
-				if (cueObject.snapToLines === true) {
-					cueWidth = availableCueArea.width * (cueSize/100);
-				} else {
-					cueWidth = videoMetrics.width * (cueSize/100);
-				}
-
-				if (cueObject.textPosition === "auto") {
-					cueX = ((availableCueArea.right - cueWidth) / 2) + availableCueArea.left;
-				} else {
-					internalTextPosition = parseFloat(String(cueObject.textPosition).replace(/[^\d\.]/ig,""));
-					cueX = ((availableCueArea.right - cueWidth) * (internalTextPosition/100)) + availableCueArea.left;
-				}
-				
-				if (cueObject.snapToLines === true) {
+								
+				if (cueSnap) {
 					cueY = ((videoHeightInLines-1) * pixelLineHeight) + availableCueArea.top;
+					cueWidth = availableCueArea.width * cueSize/100;
 				} else {
 					tmpHeightExclusions = videoMetrics.controlHeight + pixelLineHeight + (cuePaddingTB*2);
-					cueY = (videoMetrics.height - tmpHeightExclusions) * (cueObject.linePosition/100);
+					cueY = (videoMetrics.height - tmpHeightExclusions) * (cueLine/100);
+					cueWidth = videoMetrics.width * cueSize/100;
 				}
+				
+				cueX = ((availableCueArea.right - cueWidth) * (cuePosition/100)) + availableCueArea.left;
 				
 			} else {
 				// Basic positioning
-				cueY = availableCueArea.top;
-				cueX = availableCueArea.right - verticalPixelLineHeight;
-				cueWidth = verticalPixelLineHeight;
 				cueHeight = availableCueArea.height * (cueSize/100);
-				
-				// Split into characters, and continue calculating width & positioning with new info
-				characterCount = spanify(DOMNode,basePixelFontSize,verticalPixelLineHeight);
-				characters = [].slice.call(DOMNode.querySelectorAll("span.captionator-cue-character"),0);
-				charactersPerLine = Math.floor((cueHeight-cuePaddingTB*2)/basePixelFontSize);
-				cueWidth = Math.ceil(characterCount/charactersPerLine) * verticalPixelLineHeight;
-				lineCount = Math.ceil(characterCount/charactersPerLine);
-				finalLineCharacterCount = characterCount - (charactersPerLine * (lineCount - 1));
-				finalLineCharacterHeight = finalLineCharacterCount * basePixelFontSize;
-				
-				// Work out CueX taking into account linePosition...
-				if (cueObject.snapToLines === true) {
-					cueX = cueObject.direction === "vertical-lr" ? availableCueArea.left : availableCueArea.right - cueWidth;
-				} else {
-					var temporaryWidthExclusions = cueWidth + (cuePaddingLR * 2);
-					if (cueObject.direction === "vertical-lr") {
-						cueX = (videoMetrics.width - temporaryWidthExclusions) * (cueObject.linePosition/100);
-					} else {
-						cueX = (videoMetrics.width-temporaryWidthExclusions) - ((videoMetrics.width - temporaryWidthExclusions) * (cueObject.linePosition/100));
-					}
-				}
-				
 				// Work out CueY taking into account textPosition...
-				if (cueObject.textPosition === "auto") {
-					cueY = ((availableCueArea.bottom - cueHeight) / 2) + availableCueArea.top;
-				} else {
-					cueObject.textPosition = parseFloat(String(cueObject.textPosition).replace(/[^\d\.]/ig,""));
-					cueY = ((availableCueArea.bottom - cueHeight) * (cueObject.textPosition/100)) + 
-							availableCueArea.top;
-				}
+				cueY = ((availableCueArea.bottom - cueHeight) * (cuePosition/100)) + 
+						availableCueArea.top;
 				
-				
-				// Iterate through the characters and position them accordingly...
-				currentLine = 0;
-				characterPosition = 0;
-				characterX = 0;
-				characterY = 0;
-				
-				characters.forEach(function(characterSpan,characterCount) {
-					if (cueObject.direction === "vertical-lr") {
-						characterX = verticalPixelLineHeight * currentLine;
-					} else {
-						characterX = cueWidth - (verticalPixelLineHeight * (currentLine+1));
-					}
+				(function(){	// Split into characters, and continue calculating width & positioning with new info
+					var currentLine = 0, characterPosition = 0,
+						characters = spanify(DOMNode,basePixelFontSize,verticalPixelLineHeight,[]),
+						characterCount = characters.length,
+						charactersPerLine = Math.floor((cueHeight-cuePaddingTB*2)/basePixelFontSize),
+						lineCount = Math.ceil(characterCount/charactersPerLine),
+						finalLineCharacterCount = characterCount - (charactersPerLine * (lineCount - 1)),
+						finalLineCharacterHeight = finalLineCharacterCount * basePixelFontSize;
 					
-					if (cueObject.alignment === "start" || (cueObject.alignment !== "start" && currentLine < lineCount-1)) {
-						characterY = (characterPosition * basePixelFontSize) + cuePaddingTB;
-					} else if (cueObject.alignment === "end") {
-						characterY = ((characterPosition * basePixelFontSize)-basePixelFontSize) + ((cueHeight+(cuePaddingTB*2))-finalLineCharacterHeight);
-					} else if (cueObject.alignment === "middle") {
-						characterY = (((cueHeight - (cuePaddingTB*2))-finalLineCharacterHeight)/2) + (characterPosition * basePixelFontSize);
-					}
+					cueWidth = Math.ceil(characterCount/charactersPerLine) * verticalPixelLineHeight;
 					
-					applyStyles(characterSpan,{
-						"top": characterY + "px",
-						"left": characterX + "px"
+					// Work out CueX taking into account linePosition...
+					cueX = cueSnap?(cueVertical === "lr" ? availableCueArea.left : availableCueArea.right - cueWidth)
+						:((videoMetrics.width - (cueWidth + (cuePaddingLR * 2))) * (cueVertical === "lr"?cueLine/100:1-cueLine/100));
+					
+					// Iterate through the characters and position them accordingly...
+					characters.forEach(function(characterSpan) {
+						var characterY,
+							characterX = (cueVertical === "lr")
+								?verticalPixelLineHeight * currentLine:cueWidth - (verticalPixelLineHeight * (currentLine+1));
+						
+						if(currentLine < (lineCount-1)) {
+							characterY = (characterPosition * basePixelFontSize) + cuePaddingTB;
+						}else switch(cueObject.align){
+							case "start":
+								characterY = (characterPosition * basePixelFontSize) + cuePaddingTB;
+								break;
+							case "end":
+								characterY = ((characterPosition * basePixelFontSize)-basePixelFontSize) + ((cueHeight+(cuePaddingTB*2))-finalLineCharacterHeight);
+								break;
+							case "middle":
+								characterY = (((cueHeight - (cuePaddingTB*2))-finalLineCharacterHeight)/2) + (characterPosition * basePixelFontSize);
+						}
+						
+						applyStyles(characterSpan,{
+							"top": characterY + "px",
+							"left": characterX + "px"
+						});
+						
+						if (characterPosition >= charactersPerLine-1) {
+							characterPosition = 0;
+							currentLine ++;
+						} else {
+							characterPosition ++;
+						}
 					});
-					
-					if (characterPosition >= charactersPerLine-1) {
-						characterPosition = 0;
-						currentLine ++;
-					} else {
-						characterPosition ++;
-					}
-				});
+				}());
 			}
 			
-			if (cueObject.direction === "horizontal") {
-				if (checkDirection(String(cueObject.text)) === "rtl") {
-					cueAlignment = {"start":"right","middle":"center","end":"left"}[cueObject.alignment];
-				} else {	
-					cueAlignment = {"start":"left","middle":"center","end":"right"}[cueObject.alignment];
-				}
-			}
-
 			applyStyles(DOMNode,{
 				"position": "absolute",
 				"overflow": "hidden",
@@ -261,49 +209,37 @@ var CaptionRenderer = (function() {
 				"top": cueY + "px",
 				"left": cueX + "px",
 				"padding": cuePaddingTB + "px " + cuePaddingLR + "px",
-				"textAlign": cueAlignment,
+				"textAlign": (cueVertical !== "")?"":
+					(checkDirection(String(cueObject.text)) === "rtl"
+						?{"start":"right","middle":"center","end":"left"}
+						:{"start":"left","middle":"center","end":"right"})[cueObject.align],
 				"backgroundColor": "rgba(" + options.cueBackgroundColour.join(",") + ")",
 				"direction": checkDirection(String(cueObject.text)),
 				"lineHeight": baseLineHeight + "pt",
 				"boxSizing": "border-box"
 			});
 			
-			if (cueObject.direction === "vertical" || cueObject.direction === "vertical-lr") {
-				// Work out how to shrink the available render area
-				// If subtracting from the right works out to a larger area, subtract from the right.
-				// Otherwise, subtract from the left.	
-				if (((cueX - availableCueArea.left) - availableCueArea.left) >=
-					(availableCueArea.right - (cueX + cueWidth))) {
-					
-					availableCueArea.right = cueX;
-				} else {
-					availableCueArea.left = cueX + cueWidth;
-				}
-				
-				availableCueArea.width =
-					availableCueArea.right - 
-					availableCueArea.left;
-				
-			} else {
+			if (cueVertical === "") {
 				// Now shift cue up if required to ensure it's all visible
 				if (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
-					if (cueObject.snapToLines) {
-						var upwardAjustmentInLines = 0;
-						while (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
-							cueHeight += pixelLineHeight;
-							DOMNode.style.height = cueHeight + "px";
-							upwardAjustmentInLines ++;
-						}
-						
-						cueY = cueY - (upwardAjustmentInLines*pixelLineHeight);
-						DOMNode.style.top = cueY + "px";
+					if (cueSnap) {
+						(function(){
+							var upwardAjustment = 0;
+							while (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
+								cueHeight += pixelLineHeight;
+								DOMNode.style.height = cueHeight + "px";
+								upwardAjustment ++;
+							}
+							
+							cueY = cueY - (upwardAjustment*pixelLineHeight);
+							DOMNode.style.top = cueY + "px";
+						}());
 					} else {
 						// Not working by lines, so instead of shifting up, simply throw out old cueY calculation
 						// and completely recalculate its value
-						var upwardAjustment = (DOMNode.scrollHeight - cueHeight);
 						cueHeight = (DOMNode.scrollHeight + cuePaddingTB);
 						tmpHeightExclusions = videoMetrics.controlHeight + cueHeight + (cuePaddingTB*2);
-						cueY = (videoMetrics.height - tmpHeightExclusions) * (cueObject.linePosition/100);
+						cueY = (videoMetrics.height - tmpHeightExclusions) * (cueLine/100);
 						
 						DOMNode.style.height = cueHeight + "px";
 						DOMNode.style.top = cueY + "px";
@@ -317,117 +253,29 @@ var CaptionRenderer = (function() {
 					(availableCueArea.bottom - (cueY + cueHeight)) &&
 					availableCueArea.bottom > cueY) {
 					availableCueArea.bottom = cueY;
-				} else if (videoElement._captionator_availableCueArea.top < cueY + cueHeight) {
+				} else if (availableCueArea.top < cueY + cueHeight) {
 					availableCueArea.top = cueY + cueHeight;
 				}
 				
 				availableCueArea.height =
 					availableCueArea.bottom - 
 					availableCueArea.top;
+			} else {
+				// Work out how to shrink the available render area
+				// If subtracting from the right works out to a larger area, subtract from the right.
+				// Otherwise, subtract from the left.	
+				if (((cueX - availableCueArea.left) - availableCueArea.left) >=
+					(availableCueArea.right - (cueX + cueWidth))) {
+					availableCueArea.right = cueX;
+				} else {
+					availableCueArea.left = cueX + cueWidth;
+				}
+				
+				availableCueArea.width =
+					availableCueArea.right - 
+					availableCueArea.left;
 			}
-			
-			// DEBUG FUNCTIONS
-			// This function can be used for debugging WebVTT captions. It will not be
-			// included in production versions of 
-			// -----------------------------------------------------------------------
-			if (options.debugMode) {
-				var debugCanvas, debugContext;
-				var generateDebugCanvas = function() {
-					if (!debugCanvas) {
-						if (renderer.captionatorDebugCanvas) {
-							debugCanvas = renderer.captionatorDebugCanvas;
-							debugContext = renderer.captionatorDebugContext;
-						} else {
-							debugCanvas = document.createElement("canvas");
-							debugCanvas.setAttribute("width",videoMetrics.width);
-							debugCanvas.setAttribute("height",videoMetrics.height - videoMetrics.controlHeight);
-							document.body.appendChild(debugCanvas);
-							applyStyles(debugCanvas,{
-								"position": "absolute",
-								"top": videoMetrics.top + "px",
-								"left": videoMetrics.left + "px",
-								"width": videoMetrics.width + "px",
-								"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
-								"zIndex": 3000
-							});
-					
-							debugContext = debugCanvas.getContext("2d");
-							renderer.captionatorDebugCanvas = debugCanvas;
-							renderer.captionatorDebugContext = debugContext;
-						}
-					}
-				};
-				
-				var clearDebugCanvas = function() {
-					generateDebugCanvas();
-					debugCanvas.setAttribute("width",videoMetrics.width);
-				};
-				
-				var drawLines = function() {
-					var lineIndex;
-					
-					// Set up canvas for drawing debug information
-					generateDebugCanvas();
-					
-					debugContext.strokeStyle = "rgba(255,0,0,0.5)";
-					debugContext.lineWidth = 1;
-					
-					// Draw horizontal line dividers
-					debugContext.beginPath();
-					for (lineIndex = 0; lineIndex < videoHeightInLines; lineIndex ++) {
-						debugContext.moveTo(0.5,(lineIndex*pixelLineHeight)+0.5);
-						debugContext.lineTo(videoMetrics.width,(lineIndex*pixelLineHeight)+0.5);
-					}
-					
-					debugContext.closePath();
-					debugContext.stroke();
-					debugContext.beginPath();
-					debugContext.strokeStyle = "rgba(0,255,0,0.5)";
-					
-					// Draw vertical line dividers
-					// Right to left, vertical
-					for (lineIndex = videoWidthInLines; lineIndex >= 0; lineIndex --) {
-						debugContext.moveTo((videoMetrics.width-(lineIndex*verticalPixelLineHeight))-0.5,-0.5);
-						debugContext.lineTo((videoMetrics.width-(lineIndex*verticalPixelLineHeight))-0.5,videoMetrics.height);
-					}
-					
-					debugContext.closePath();
-					debugContext.stroke();
-					debugContext.beginPath();
-					debugContext.strokeStyle = "rgba(255,255,0,0.5)";
-					
-					// Draw vertical line dividers
-					// Left to right, vertical
-					for (lineIndex = 0; lineIndex <= videoWidthInLines; lineIndex ++) {
-						debugContext.moveTo((lineIndex*verticalPixelLineHeight)+0.5,-0.5);
-						debugContext.lineTo((lineIndex*verticalPixelLineHeight)+0.5,videoMetrics.height);
-					}
-					
-					debugContext.stroke();
-					
-					videoElement.linesDrawn = true;
-				};
-				
-				var drawAvailableArea = function() {
-					generateDebugCanvas();
-					
-					debugContext.fillStyle = "rgba(100,100,255,0.5)";
-					
-					debugContext.fillRect(
-							availableCueArea.left,
-							availableCueArea.top,
-							availableCueArea.right,
-							availableCueArea.bottom);
-					debugContext.stroke();
-					
-				};
-				
-				clearDebugCanvas();
-				drawAvailableArea();
-				drawLines();
-			}
-			// END DEBUG FUNCTIONS
-		}
+		};
 	}());
 	/* getNodeMetrics(DOMNode)
 		Calculates and returns a number of sizing and position metrics from a DOMNode of any variety (though this function is intended
@@ -502,158 +350,6 @@ var CaptionRenderer = (function() {
 			}
 		}
 	}
-	/* processVideoElement(videoElement <HTMLVideoElement>,
-							[defaultLanguage - string in BCP47],
-							[options - JS Object])
-
-		Processes track items within an HTMLVideoElement. The second and third parameter are both optional.
-		First parameter: Mandatory HTMLVideoElement object.
-		Second parameter: BCP-47 string for default language. If this parameter is omitted, the User Agent's language
-		will be used to choose a track.
-		Third parameter: as yet unused - will implement animation settings and some other global options with this
-		parameter later.
-		RETURNS: Reference to the HTMLVideoElement.	
-	*/
-	var processVideoElement = (function(){
-		var counter = 0;
-		function generateID() {
-			counter++;
-			return String("captionator")+counter.toString(36);
-		}
-		return function(renderer,defaultLanguage,options) {
-			var trackList = [],
-				videoElement = renderer.element;
-			var language = navigator.language || navigator.userLanguage;
-			var globalLanguage = defaultLanguage || language.split("-")[0];
-			options = options instanceof Object? options : {};
-
-			var enabledDefaultTrack = false;
-			[].slice.call(videoElement.querySelectorAll("track"),0).forEach(function(trackElement) {
-				var sources = (trackElement.querySelectorAll("source").length > 0)
-								?trackElement.querySelectorAll("source")
-								:trackElement.getAttribute("src");			
-				var trackObject = renderer.addTextTrack(
-										(trackElement.getAttribute("id")||generateID()),
-										trackElement.getAttribute("kind"),
-										trackElement.getAttribute("label"),
-										trackElement.getAttribute("srclang").split("-")[0],
-										sources,
-										trackElement.getAttribute("type"),
-										trackElement.hasAttribute("default"));
-			
-				trackElement.track = trackObject;
-				trackObject.trackNode = trackElement;
-				trackObject.renderer = renderer;
-				trackList.push(trackObject);
-			
-				// Now determine whether the track is visible by default.
-				// The comments in this section come straight from the spec...
-				var trackEnabled = false;
-			
-				// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
-				// with this text track kind, text track language, and text track label enabled, and there is no other text track
-				// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
-				// ---> Let the text track mode be showing.
-				if ((trackObject.kind === "subtitles" || trackObject.kind === "captions") &&
-					(defaultLanguage === trackObject.language && options.enableCaptionsByDefault)) {
-					if (!trackList.filter(function(trackObject) {
-							if ((trackObject.kind === "captions" || trackObject.kind === "subtitles") && defaultLanguage === trackObject.language && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
-				// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
-				// kind of chapters whose text track mode is showing
-				// ---> Let the text track mode be showing.
-				if (trackObject.kind === "chapters" && (defaultLanguage === trackObject.language)) {
-					if (!trackList.filter(function(trackObject) {
-							if (trackObject.kind === "chapters" && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
-				// with this text track language and text track label enabled, and there is no other text track in the media element's
-				// list of text tracks with a text track kind of descriptions whose text track mode is showing
-				if (trackObject.kind === "descriptions" && (options.enableDescriptionsByDefault === true) && (defaultLanguage === trackObject.language)) {
-					if (!trackList.filter(function(trackObject) {
-							if (trackObject.kind === "descriptions" && trackObject.mode === TextTrack.SHOWING) {
-								return true;
-							} else {
-								return false;
-							}
-						}).length) {
-						trackEnabled = true;
-					}
-				}
-			
-				// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
-				// the user agent must furthermore change that text track's text track mode to hidden.
-				if (trackEnabled === true) {
-					trackList.forEach(function(trackObject) {
-						if(trackObject.trackNode.hasAttribute("default") && trackObject.mode === TextTrack.SHOWING) {
-							trackObject.mode = TextTrack.HIDDEN;
-						}
-					});
-				}
-			
-				// If the track element has a default attribute specified, and there is no other text track in the media element's
-				// list of text tracks whose text track mode is showing or showing by default
-				// Let the text track mode be showing by default.
-				if (trackElement.hasAttribute("default")) {
-					if (!trackList.filter(function(trackObject) {
-							return (trackObject.trackNode.hasAttribute("default") && trackObject.trackNode !== trackElement);
-						}).length) {
-						trackEnabled = true;
-						trackObject.internalDefault = true;
-					}
-				}
-			
-				// Otherwise
-				// Let the text track mode be disabled.
-				if (trackEnabled === true) { trackObject.mode = TextTrack.SHOWING; }
-			});
-
-			window.addEventListener("resize", function() {
-				renderer.rebuildCaptions(true);
-			},false);
-
-			videoElement.addEventListener("timeupdate", function(){
-				// update active cues
-				try {
-					renderer.tracks.forEach(function(track) {
-						track.currentTime = videoElement.currentTime;
-					});
-				} catch(error) {}
-			
-				renderer.rebuildCaptions(false);
-			}, false);
-			
-			// Hires mode
-			if (options.enableHighResolution === true) {
-				//TODO: use requestAnimationFrame
-				window.setInterval(function captionatorHighResProcessor() {
-					try {
-						renderer.tracks.forEach(function(track) {
-							track.activeCues.refreshCues.apply(track.activeCues);
-						});
-					} catch(error) {}
-					renderer.rebuildCaptions(false);
-				},20);
-			}
-		}
-	}());
 	
 	/* CaptionRenderer([dom element],
 						[options - JS Object])
@@ -664,9 +360,12 @@ var CaptionRenderer = (function() {
 		present in the DOM will be captioned if tracks are available.
 	*/
 	function CaptionRenderer(element,options) {
-		if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,defaultLanguage,options); }
+		if(!(this instanceof CaptionRenderer)){ return new CaptionRenderer(element,options); }
 		options = options instanceof Object? options : {};
-		var containerObject = document.createElement("div");
+		var media, renderer = this,
+			timeupdate = function(){ renderer.currentTime = media.currentTime; },
+			internalTime = 0,
+			containerObject = document.createElement("div");
 		containerObject.className = "captionator-cue-canvas";
 		// TODO(silvia): we should only do aria-live on descriptions and that doesn't need visual display
 		containerObject.setAttribute("aria-live","polite");
@@ -696,19 +395,43 @@ var CaptionRenderer = (function() {
 		if (!(options.cueBackgroundColour instanceof Array)) {
 			options.cueBackgroundColour = [0,0,0,0.5];	//	R,G,B,A
 		}
-		processVideoElement(this,defaultLanguage,options);
+		
+		window.addEventListener("resize", this.rebuildCaptions.bind(this,true) ,false);
+		this.bindMediaElement = function(element) {
+			media && media.removeEventListener('timeupdate',timeupdate,false);
+			media = element;
+			media && media.addEventListener('timeupdate',timeupdate,false);
+		};
+		
+		Object.defineProperties(this,{
+			currentTime: {
+				get: function(){ return internalTime; },
+				set: function(time){
+					internalTime = +time || 0;
+					// update active cues
+					try{ this.tracks.forEach(function(track) { track.currentTime = internalTime; }); }
+					catch(error) {}
+					this.rebuildCaptions(false);
+				},
+				enumerable: true
+			}
+		});
 	}
 	
-	CaptionRenderer.prototype.addTextTrack = function(id,kind,label,language,src,type,isDefault) {
-		var newTrack = new TextTrack(
-			typeof(id) === "string" ? id : "",
-			kind,
+	CaptionRenderer.prototype.addTextTrack = function(kind,label,language) {
+		var newTrack;
+		if(kind instanceof TextTrack){
+			newTrack = kind;
+		}else{
+			newTrack = new TextTrack(
+			typeof(kind) === "string" ? kind : "",
 			typeof(label) === "string" ? label : "",
-			typeof(language) === "string" ? language : "",
-			src,
-			typeof(isDefault) === "boolean" ? isDefault : false);
+			typeof(language) === "string" ? language : "");
+			newTrack.readyState = TextTrack.LOADED;
+		}
 		if (newTrack) {
 			this.tracks.push(newTrack);
+			newTrack.renderer = this;
 			return newTrack;
 		}
 		return null;			
@@ -764,17 +487,17 @@ var CaptionRenderer = (function() {
 		}
 		return function(dirtyBit) {
 			var renderer = this;
-			var videoElement = this.element;
 			var options = this.options;
 			var preprocess = options.preprocess;
 			var styleCue = options.styleCue;
-			var currentTime = videoElement.currentTime;
+			var currentTime = this.currentTime;
 			var compositeActiveCues = [];
 			var activeCueIDs;
 
 			// Work out what cues are showing...
 			this.tracks.forEach(function(track) {
-				if (track.mode === TextTrack.SHOWING && track.readyState === TextTrack.LOADED) {
+				if (track.mode === "showing" && track.readyState === TextTrack.LOADED) {
+					console.log(track.label,track.currentTime);
 					// Do a reverse sort
 					// Since the render area decreases in size with each successive cue added,
 					// and we want cues which are older to be displayed above cues which are newer,
@@ -789,20 +512,22 @@ var CaptionRenderer = (function() {
 			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.toString(currentTime).length;}).join('');
 			
 			// If they've changed, we re-render our cue canvas.
-			if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
+			render: if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
 				// Get the canvas ready if it isn't already
 				styleCueContainer(this);
 				this.containerObject.innerHTML = "";
+			
+				if(!compositeActiveCues.length){ break render; }
 			
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
 				// (depending on whether the `direction` of the cue is vertical or horizontal)
 				// Cues which have an explicit position set do not detract from this area.
 				this.availableCueArea = {
-					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-					"right": this.videoMetrics.width,
 					"top": 0,
 					"left": 0,
+					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+					"right": this.videoMetrics.width,
 					"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
 					"width": this.videoMetrics.width
 				};
@@ -822,6 +547,93 @@ var CaptionRenderer = (function() {
 			this.previousActiveCues = activeCueIDs;
 		}
 	}());
+	
+	/* processVideoElement(videoElement <HTMLVideoElement>,
+						[options - JS Object])
+	*/
+	CaptionRenderer.prototype.processVideoElement = function(videoElement,options) {
+		options = options instanceof Object? options : {};
+		var trackList = this.tracks;
+		var renderer = this;
+		var language = navigator.language || navigator.userLanguage;
+		var defaultLanguage = options.language;
+		var globalLanguage = defaultLanguage || language.split("-")[0];
+		var enabledDefaultTrack = false;
+		var elements = [].slice.call(videoElement.querySelectorAll("track"),0);
+		
+		if(elements.length === 0){ return; }
+		
+		elements.forEach(function(trackElement) {
+			var trackEnabled = false,
+				sources = trackElement.querySelectorAll("source"),
+				trackObject = new TextTrack(
+							trackElement.getAttribute("kind"),
+							trackElement.getAttribute("label"),
+							trackElement.getAttribute("srclang").split("-")[0]);
+			
+			trackObject
+			trackObject.loadTrack(sources.length > 0?sources:trackElement.getAttribute("src"));
+			
+			// Now determine whether the track is visible by default.
+			// The comments in this section come straight from the spec...
+			trackObject.internalDefault = trackElement.hasAttribute("default");			
+			switch(trackObject.kind){
+				// If the text track kind is subtitles or captions and the user has indicated an interest in having a track
+				// with this text track kind, text track language, and text track label enabled, and there is no other text track
+				// in the media element's list of text tracks with a text track kind of either subtitles or captions whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				case "subtitles":
+				case "captions": if(options.enableCaptionsByDefault && defaultLanguage === trackObject.language) {
+					trackEnabled = !trackList.some(function(track) {
+						return	(track.kind === "captions" || track.kind === "subtitles") &&
+								defaultLanguage === trackObject.language &&
+								trackObject.mode === "showing";
+					});
+				}break;
+				// If the text track kind is chapters and the text track language is one that the user agent has reason to believe is
+				// appropriate for the user, and there is no other text track in the media element's list of text tracks with a text track
+				// kind of chapters whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				case "chapters": if (defaultLanguage === trackObject.language) {
+					trackEnabled = !trackList.filter(function(track) {
+						return track.kind === "chapters" && track.mode === "showing";
+					});
+				}break;
+				// If the text track kind is descriptions and the user has indicated an interest in having text descriptions
+				// with this text track language and text track label enabled, and there is no other text track in the media element's
+				// list of text tracks with a text track kind of descriptions whose text track mode is showing
+				// ---> Let the text track mode be showing.
+				case "descriptions": if(options.enableDescriptionsByDefault && defaultLanguage === trackObject.language) {
+					trackEnabled = !trackList.filter(function(track) {
+						return track.kind === "descriptions" && track.mode === "showing";
+					});
+				}
+			}
+		
+			// If there is a text track in the media element's list of text tracks whose text track mode is showing by default,
+			// the user agent must furthermore change that text track's text track mode to hidden.
+			trackEnabled && trackList.forEach(function(track) {
+				if(track.internalDefault && trackObject.mode === "showing") {
+					trackObject.mode = "hidden";
+				}
+			});
+		
+			// If the track element has a default attribute specified, and there is no other text track in the media element's
+			// list of text tracks whose text track mode is showing or showing by default
+			// Let the text track mode be showing by default.
+			trackEnabled |= trackObject.internalDefault && !trackList.some(function(track) {
+				return track.mode === "showing";
+			});
+	
+			// Otherwise
+			// Let the text track mode be disabled.
+			trackObject.mode = trackEnabled?"showing":"disabled";
+			trackObject.renderer = renderer;
+			trackList.push(trackObject);
+		});
+		
+		this.rebuildCaptions(false);
+	};
 	
 	return CaptionRenderer;
 })();

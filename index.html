@@ -25,9 +25,9 @@
 		<h2>Media Controls</h2>
 
 		<!-- Include Caption Renderer -->
-		<!--<script type="text/javascript" src="/Ayamel/TimedText/TimedText.js"></script>
-		<script type="text/javascript" src="/Ayamel/TimedText/WebVTT.js"></script>-->
-		<script type="text/javascript" src="js/TextTrack.js"></script>
+		<script type="text/javascript" src="/Ayamel/TimedText/TimedText.js"></script>
+		<script type="text/javascript" src="/Ayamel/TimedText/WebVTTnew.js"></script>
+		<script type="text/javascript" src="/Ayamel/TimedText/TextTrack.js"></script>
 		<script type="text/javascript" src="js/caption-renderer.js"></script>
 		
 		<!-- Example Usage -->
@@ -36,9 +36,7 @@
 			window.addEventListener("load",function() {
 				var videoObject = document.getElementById("videoTest");
 				var renderer = CaptionRenderer(videoObject,{
-					debugMode: !!window.location.search.match(/debug/i),
 					sizeCuesByTextBoundingBox: !!window.location.search.match(/boundingBox/i),
-					enableHighResolution: !!window.location.search.match(/highres/i),
 					preprocess: function(str){
 						return str;
 					},
@@ -47,7 +45,8 @@
 					}
 				});
 				
-				videoObject.volume = 0;
+				renderer.processVideoElement(videoObject);
+				renderer.bindMediaElement(videoObject);
 				document.body.appendChild(generateMediaControls(renderer));
 			},false);
 		</script>
