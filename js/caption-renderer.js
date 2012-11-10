@@ -496,8 +496,7 @@ var CaptionRenderer = (function() {
 
 			// Work out what cues are showing...
 			this.tracks.forEach(function(track) {
-				if (track.mode === "showing" && track.readyState === TextTrack.LOADED) {
-					console.log(track.label,track.currentTime);
+				if (track.mode === "showing" && track.readyState === TextTrack.LOADED && (track.kind === "captions" || track.kind === "subtitles")) {
 					// Do a reverse sort
 					// Since the render area decreases in size with each successive cue added,
 					// and we want cues which are older to be displayed above cues which are newer,
@@ -509,7 +508,7 @@ var CaptionRenderer = (function() {
 			});
 			
 			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
-			activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.toString(currentTime).length;}).join('');
+			//activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.length;}).join('');
 			
 			// If they've changed, we re-render our cue canvas.
 			render: if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
@@ -534,17 +533,34 @@ var CaptionRenderer = (function() {
 			
 				// Now we render the cues
 				compositeActiveCues.forEach(function(cue) {
-					var cueNode = document.createElement("div");
+					var DOM, timeNodes, cueNode = document.createElement("div");
 					if(String(cue.id).length){ cueNode.id = cue.id; }
 					cueNode.className = "captionator-cue";
-					cueNode.innerHTML = preprocess(cue.text.toString(currentTime));										
+					switch(cue.track.kind){
+						case "subtitles":
+						case "captions":
+							DOM = cue.getCueAsHTML();
+						default:
+							DOM = cue.getCueAsHTML(false);
+					}
+					//Handle karaoke styling
+					timeNodes = [].slice.call(DOM.querySelectorAll('[data-timestamp]'),0);
+					timeNodes.sort(function(a,b){ return a.dataset.timestamp > b.dataset.timestamp ? 1 : -1; });
+					timeNodes.forEach(node,index){
+						if(node.dataset.timestamp <= currentTime){
+							//apply :past style
+						}else{
+							//apply :future style
+						}
+					});
+					cueNode.appendChild(DOM);
 					cueNode = styleCue(cueNode);
-					positionCue(cueNode,cue,renderer);
 					renderer.containerObject.appendChild(cueNode);
+					positionCue(cueNode,cue,renderer);
 				});
 			}
 			
-			this.previousActiveCues = activeCueIDs;
+			//this.previousActiveCues = activeCueIDs;
 		}
 	}());
 	
