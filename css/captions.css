@@ -38,12 +38,12 @@
 	text-align: center;
 }
 
-q.voice:before {
+span[data-voice]:before {
 	content: attr(data-voice);
 	color:red;
 	margin-right: 0.5em;
 }
 
-q.voice:after {
+q[data-voice]:after {
 	content: "";
 }

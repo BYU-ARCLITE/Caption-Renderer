@@ -485,16 +485,45 @@ var CaptionRenderer = (function() {
 				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
 			}
 		}
-		return function(dirtyBit) {
+		
+		function parse_timestamp(str){
+			var data = str.match(/(\d\d+):(\d\d):(\d\d).(\d\d\d)/);
+			return parseInt(data[1],10)*3600+parseInt(data[2],10)*60+parseInt(data[3],10)+parseFloat("0."+data[4]);
+		}
+		
+		function timeStyle(DOM,currentTime){
+			//depth-first traversal of the cue DOM
+			var node, children = [].slice.call(DOM.childNodes,0),
+				time = 0;
+			while(children.length){
+				node = children.shift();
+				if(node.nodeType === Node.PROCESSING_INSTRUCTION_NODE && node.target === "timestamp"){
+					time = parseFloat(node.dataset.seconds);
+					if(!time){ time = parse_timestamp(node.data); }
+				}else if(node.nodeType === Node.ELEMENT_NODE){
+					if(node.dataset.target === "timestamp"){
+						time = parseFloat(node.dataset.seconds);
+					}else{
+						if(time <= currentTime){ //apply :past styles
+
+						}else{ //apply :future styles
+							node.style.visibility = "hidden";
+						}
+						[].unshift.apply(children,node.childNodes);
+					}
+				}
+			}
+		}
+		
+		return function() {
 			var renderer = this;
 			var options = this.options;
-			var preprocess = options.preprocess;
 			var styleCue = options.styleCue;
 			var currentTime = this.currentTime;
 			var compositeActiveCues = [];
-			var activeCueIDs;
 
 			// Work out what cues are showing...
+			//WHY IS IT SKIPPING CUES?
 			this.tracks.forEach(function(track) {
 				if (track.mode === "showing" && track.readyState === TextTrack.LOADED && (track.kind === "captions" || track.kind === "subtitles")) {
 					// Do a reverse sort
@@ -507,17 +536,10 @@ var CaptionRenderer = (function() {
 				}
 			});
 			
-			// Determine whether cues have changed - we generate an ID based on track ID, cue ID, and text length
-			//activeCueIDs = compositeActiveCues.map(function(cue) {return cue.track.id + cue.id + cue.text.length;}).join('');
-			
-			// If they've changed, we re-render our cue canvas.
-			render: if (dirtyBit || activeCueIDs !== this.previousActiveCues) {				
-				// Get the canvas ready if it isn't already
-				styleCueContainer(this);
-				this.containerObject.innerHTML = "";
-			
-				if(!compositeActiveCues.length){ break render; }
-			
+			// Get the canvas ready if it isn't already
+			styleCueContainer(this);
+			this.containerObject.innerHTML = "";
+			if(compositeActiveCues.length){
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
 				// (depending on whether the `direction` of the cue is vertical or horizontal)
@@ -544,23 +566,13 @@ var CaptionRenderer = (function() {
 							DOM = cue.getCueAsHTML(false);
 					}
 					//Handle karaoke styling
-					timeNodes = [].slice.call(DOM.querySelectorAll('[data-timestamp]'),0);
-					timeNodes.sort(function(a,b){ return a.dataset.timestamp > b.dataset.timestamp ? 1 : -1; });
-					timeNodes.forEach(node,index){
-						if(node.dataset.timestamp <= currentTime){
-							//apply :past style
-						}else{
-							//apply :future style
-						}
-					});
+					timeStyle(DOM,currentTime);
 					cueNode.appendChild(DOM);
 					cueNode = styleCue(cueNode);
 					renderer.containerObject.appendChild(cueNode);
 					positionCue(cueNode,cue,renderer);
 				});
 			}
-			
-			//this.previousActiveCues = activeCueIDs;
 		}
 	}());
 	
