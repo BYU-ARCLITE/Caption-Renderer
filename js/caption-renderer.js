@@ -493,7 +493,7 @@ var CaptionRenderer = (function() {
 		
 		function timeStyle(DOM,currentTime){
 			//depth-first traversal of the cue DOM
-			var node, children = [].slice.call(DOM.childNodes,0),
+			var node, newnode, children = [].slice.call(DOM.childNodes,0),
 				time = 0;
 			while(children.length){
 				node = children.shift();
@@ -509,16 +509,32 @@ var CaptionRenderer = (function() {
 						}else{ //apply :future styles
 							node.style.visibility = "hidden";
 						}
-						[].unshift.apply(children,node.childNodes);
+						if(!(node.childNodes.length === 1 && node.firstChild.nodeType === Node.TEXT_NODE)){
+							children.unshift.apply(children,node.childNodes);
+						}
 					}
+				}else if(node.nodeType === Node.TEXT_NODE){ //wrap so that styles can be applied
+					newnode = document.createElement('span');
+					node.parentNode.replaceChild(newnode,node);
+					newnode.appendChild(node);
+					children.unshift(newnode);
 				}
 			}
 		}
 		
+		function defaultRenderCue(cue){
+			var node = document.createElement('div');
+			node.appendChild(cue.getCueAsHTML());
+			return node;
+		}
+		
+		function defaultStyleCue(cue,node){ return node; }
+		
 		return function() {
 			var renderer = this;
 			var options = this.options;
-			var styleCue = options.styleCue;
+			var renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue;
+			var styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue;
 			var currentTime = this.currentTime;
 			var compositeActiveCues = [];
 
@@ -555,20 +571,12 @@ var CaptionRenderer = (function() {
 			
 				// Now we render the cues
 				compositeActiveCues.forEach(function(cue) {
-					var DOM, timeNodes, cueNode = document.createElement("div");
-					if(String(cue.id).length){ cueNode.id = cue.id; }
+					var cueNode = styleCue(cue,renderCue(cue));
 					cueNode.className = "captionator-cue";
-					switch(cue.track.kind){
-						case "subtitles":
-						case "captions":
-							DOM = cue.getCueAsHTML();
-						default:
-							DOM = cue.getCueAsHTML(false);
-					}
+					
 					//Handle karaoke styling
-					timeStyle(DOM,currentTime);
-					cueNode.appendChild(DOM);
-					cueNode = styleCue(cueNode);
+					timeStyle(cueNode,currentTime);
+					
 					renderer.containerObject.appendChild(cueNode);
 					positionCue(cueNode,cue,renderer);
 				});
