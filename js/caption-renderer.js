@@ -223,7 +223,7 @@ var CaptionRenderer = (function() {
 				// Now shift cue up if required to ensure it's all visible
 				if (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
 					if (cueSnap) {
-						(function(){
+						(function(){ //this does the wrong thing with ruby text
 							var upwardAjustment = 0;
 							while (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
 								cueHeight += pixelLineHeight;
@@ -478,12 +478,6 @@ var CaptionRenderer = (function() {
 			});
 		
 			renderer.videoMetrics = videoMetrics;
-			
-			// Defeat a horrid Chrome 10 video bug
-			// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
-			if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
-				containerObject.style.backgroundColor = "rgba(0,0,0,0.01" + Math.random().toString().replace(".","") + ")";
-			}
 		}
 		
 		function parse_timestamp(str){
@@ -491,34 +485,59 @@ var CaptionRenderer = (function() {
 			return parseInt(data[1],10)*3600+parseInt(data[2],10)*60+parseInt(data[3],10)+parseFloat("0."+data[4]);
 		}
 		
-		function timeStyle(DOM,currentTime){
-			//depth-first traversal of the cue DOM
-			var node, newnode, children = [].slice.call(DOM.childNodes,0),
-				time = 0;
-			while(children.length){
-				node = children.shift();
-				if(node.nodeType === Node.PROCESSING_INSTRUCTION_NODE && node.target === "timestamp"){
-					time = parseFloat(node.dataset.seconds);
-					if(!time){ time = parse_timestamp(node.data); }
-				}else if(node.nodeType === Node.ELEMENT_NODE){
-					if(node.dataset.target === "timestamp"){
-						time = parseFloat(node.dataset.seconds);
-					}else{
-						if(time <= currentTime){ //apply :past styles
-
-						}else{ //apply :future styles
-							node.style.visibility = "hidden";
-						}
-						if(!(node.childNodes.length === 1 && node.firstChild.nodeType === Node.TEXT_NODE)){
-							children.unshift.apply(children,node.childNodes);
-						}
-					}
-				}else if(node.nodeType === Node.TEXT_NODE){ //wrap so that styles can be applied
+		function set_node_time(node,pos){
+			var newnode;
+			switch(node.nodeType){
+				case Node.TEXT_NODE:
 					newnode = document.createElement('span');
 					node.parentNode.replaceChild(newnode,node);
 					newnode.appendChild(node);
-					children.unshift(newnode);
+					node = newnode;
+				case Node.ELEMENT_NODE:
+					node.dataset[pos] = "";
+			}
+		}
+		
+		function timeStyle(DOM,currentTime){
+			//depth-first traversal of the cue DOM
+			var node = DOM, children,
+				pastNode = null,
+				futureNode = null,
+				time = 1/0; //Positive infinity
+				
+			//find the last timestamp in the past and the first in the future
+			timeloop: while(node){
+				while(node.firstChild){ node = node.firstChild; }
+				checkTime:{
+					if(node.nodeType === Node.PROCESSING_INSTRUCTION_NODE && node.target === "timestamp"){
+						time = parse_timestamp(node.data);
+					}else if(node.nodeType === Node.ELEMENT_NODE && node.dataset.target === "timestamp"){
+						time = node.dataset.seconds || parse_timestamp(node.dataset.timestamp);
+					}else{ break checkTime; }
+					if(time < currentTime){
+						pastNode = node;
+					}else if(time > currentTime){
+						futureNode = node;
+						break timeloop;
+					}
 				}
+				while(!node.nextSibling){
+					node = node.parentNode;
+					if(!node){ break timeloop; }
+				}
+				node = node.nextSibling;
+			}
+			
+			node = DOM;
+			children = [].slice.call(DOM.childNodes,0);		
+			while(children.length){
+				node = children.pop();
+				if(pastNode && node.compareDocumentPosition(pastNode) === 4){ //pastNode is following
+					set_node_time(node,"past");
+				}else if(futureNode && node.compareDocumentPosition(futureNode) === 2){ //futureNode is preceding
+					set_node_time(node,"future");
+				}
+				if(node.childNodes){ children.push.apply(children,node.childNodes); }
 			}
 		}
 		
@@ -577,9 +596,18 @@ var CaptionRenderer = (function() {
 					//Handle karaoke styling
 					timeStyle(cueNode,currentTime);
 					
+					[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
+						element.style.visibility = "hidden";
+					});
+					
 					renderer.containerObject.appendChild(cueNode);
 					positionCue(cueNode,cue,renderer);
 				});
+				// Defeat a horrid Chrome 10 video bug
+				// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
+				if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
+					containerObject.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
+				}
 			}
 		}
 	}());

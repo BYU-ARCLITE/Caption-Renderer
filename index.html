@@ -21,7 +21,6 @@
 			<track kind="captions" src="video/acid.vtt" type="text/vtt" srclang="en" label="WebVTT Acid Test" />
 			<track kind="captions" src="video/example.vtt" type="text/vtt" srclang="en" label="WHATWG's WebVTT Example" default />
 		</video>
-		<p><a href="index.html?debug">WebVTT renderer debug mode</a> | <a href="index.html?boundingBox">Size cues by text bounding box</a> | <a href="index.html?highres">High Resolution Mode</a></p>
 		<h2>Media Controls</h2>
 
 		<!-- Include Caption Renderer -->
@@ -41,7 +40,7 @@
 					preprocess: function(str){
 						return str;
 					},
-					styleCue: function(DOMNode){
+					styleCue: function(cue,DOMNode){
 						return DOMNode;
 					}
 				});
