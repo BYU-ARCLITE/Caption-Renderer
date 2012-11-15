@@ -501,35 +501,19 @@ var CaptionRenderer = (function() {
 		
 		function timeStyle(DOM,currentTime){
 			//depth-first traversal of the cue DOM
-			var node = DOM, children,
+			var i, node, time, children, timeNodes,
 				pastNode = null,
-				futureNode = null,
-				time = 1/0; //Positive infinity
+				futureNode = null;
 				
 			//find the last timestamp in the past and the first in the future
-			timeloop: while(node){
-				while(node.firstChild){ node = node.firstChild; }
-				checkTime:{
-					if(node.nodeType === Node.PROCESSING_INSTRUCTION_NODE && node.target === "timestamp"){
-						time = parse_timestamp(node.data);
-					}else if(node.nodeType === Node.ELEMENT_NODE && node.dataset.target === "timestamp"){
-						time = node.dataset.seconds || parse_timestamp(node.dataset.timestamp);
-					}else{ break checkTime; }
-					if(time < currentTime){
-						pastNode = node;
-					}else if(time > currentTime){
-						futureNode = node;
-						break timeloop;
-					}
-				}
-				while(!node.nextSibling){
-					node = node.parentNode;
-					if(!node){ break timeloop; }
-				}
-				node = node.nextSibling;
+			timeNodes = DOM.querySelectorAll("i[data-target=timestamp]");
+			if(timeNodes.length === 0){ return; }
+			for(i=0;node=timeNodes[i];i++){
+				time = node.dataset.seconds;
+				if(time < currentTime){ pastNode = node; }
+				else if(time > currentTime){ futureNode = node; break; }
 			}
-			if(!pastNode && !futureNode){ return; }
-			node = DOM;
+			//mark nodes as past or future appropriately
 			children = [].slice.call(DOM.childNodes,0);		
 			while(children.length){
 				node = children.pop();
