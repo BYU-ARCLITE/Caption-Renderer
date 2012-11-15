@@ -37,12 +37,8 @@
 				var videoObject = document.getElementById("videoTest");
 				var renderer = CaptionRenderer(videoObject,{
 					sizeCuesByTextBoundingBox: !!window.location.search.match(/boundingBox/i),
-					preprocess: function(str){
-						return str;
-					},
-					styleCue: function(cue,DOMNode){
-						return DOMNode;
-					}
+					preprocess: function(str){ return str; },
+					styleCue: function(cue,DOMNode){ return DOMNode; }
 				});
 				
 				renderer.processVideoElement(videoObject);

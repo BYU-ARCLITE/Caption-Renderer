@@ -507,7 +507,7 @@ var CaptionRenderer = (function() {
 				
 			//find the last timestamp in the past and the first in the future
 			timeNodes = DOM.querySelectorAll("i[data-target=timestamp]");
-			if(timeNodes.length === 0){ return; }
+			if(timeNodes.length === 0){ return 0; }
 			for(i=0;node=timeNodes[i];i++){
 				time = node.dataset.seconds;
 				if(time < currentTime){ pastNode = node; }
@@ -524,6 +524,7 @@ var CaptionRenderer = (function() {
 				}
 				if(node.childNodes){ children.push.apply(children,node.childNodes); }
 			}
+			return pastNode?pastNode.dataset.seconds:0;
 		}
 		
 		function defaultRenderCue(cue){
@@ -534,10 +535,16 @@ var CaptionRenderer = (function() {
 		
 		function defaultStyleCue(cue,node){ return node; }
 		
+		function defaultHashCue(cue){
+			return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length;
+		}
+		
 		return function(dirtyBit) {
 			var renderer = this,
+				cache = this.cache,
 				options = this.options,
 				currentTime = this.currentTime,
+				hashCue = typeof options.hashCue === 'function'?options.renderCue:defaultHashCue,
 				renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
 				styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue,
 				compositeActiveCues = [], cueElements = [], hash = "";
@@ -559,17 +566,19 @@ var CaptionRenderer = (function() {
 			if(compositeActiveCues.length){
 				// Now we render the cues
 				compositeActiveCues.forEach(function(cue) {
-					var cueNode = styleCue(cue,renderCue(cue));
+					var updateTime, cueNode;
+					cueNode = styleCue(cue,renderCue(cue));
 					cueNode.className = "captionator-cue";
 					
 					//Handle karaoke styling
-					timeStyle(cueNode,currentTime);
-					
+					updateTime = timeStyle(cueNode,currentTime);
 					[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
 						element.style.visibility = "hidden";
 					});
-					hash += cue.size+cue.vertical+cue.line+cue.position+cue.align+cueNode.innerHTML.length;
+					
 					cueElements.push([cueNode,cue]);
+					
+					hash += hashCue(cue)+updateTime;
 				});
 				// If any of them are different, we redraw them to the screen.
 				if(dirtyBit || this.hash !== hash){
