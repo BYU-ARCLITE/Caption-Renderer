@@ -121,7 +121,7 @@ var CaptionRenderer = (function() {
 			}
 			
 			if (cueObject.line === "auto") {
-				cueLine = cueVertical === "" ? videoHeightInLines : videoWidthInLines;
+				cueLine = cueVertical === "" ? "auto" : videoWidthInLines;
 			} else {
 				cueLine = parseFloat(cueObject.line);
 			}
@@ -133,8 +133,10 @@ var CaptionRenderer = (function() {
 					cueSize = (cueSize - cuePosition > textBoundingBoxPercentage)
 								?cueSize-cuePosition:textBoundingBoxPercentage;
 				}
-								
-				if (cueSnap) {
+				if(cueLine === 'auto'){
+					cueY = availableCueArea.height + availableCueArea.top - cueHeight;
+					cueWidth = availableCueArea.width * cueSize/100;
+				}else if (cueSnap) {
 					cueY = ((videoHeightInLines-1) * pixelLineHeight) + availableCueArea.top;
 					cueWidth = availableCueArea.width * cueSize/100;
 				} else {
@@ -222,7 +224,7 @@ var CaptionRenderer = (function() {
 			if (cueVertical === "") {
 				// Now shift cue up if required to ensure it's all visible
 				if (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
-					if (cueSnap) {
+					if (cueSnap || cueLine==='auto') {
 						(function(){ //this does the wrong thing with ruby text
 							var upwardAjustment = 0;
 							while (DOMNode.scrollHeight > DOMNode.offsetHeight * 1.2) {
@@ -375,7 +377,7 @@ var CaptionRenderer = (function() {
 		this.options = options;
 		this.tracks = [];
 		this.element = element;
-		this.previousActiveCues = "";
+		this.hash = "";
 		
 		element.classList.add("captioned");
 		
@@ -466,7 +468,6 @@ var CaptionRenderer = (function() {
 		
 			// Style node!
 			applyStyles(containerObject,{
-				"zIndex": 100,
 				"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
 				"width": videoMetrics.width + "px",
 				"top": (options.appendCueCanvasTo ? 0 : videoMetrics.top) + "px",
@@ -527,7 +528,7 @@ var CaptionRenderer = (function() {
 				}
 				node = node.nextSibling;
 			}
-			
+			if(!pastNode && !futureNode){ return; }
 			node = DOM;
 			children = [].slice.call(DOM.childNodes,0);		
 			while(children.length){
@@ -549,13 +550,13 @@ var CaptionRenderer = (function() {
 		
 		function defaultStyleCue(cue,node){ return node; }
 		
-		return function() {
-			var renderer = this;
-			var options = this.options;
-			var renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue;
-			var styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue;
-			var currentTime = this.currentTime;
-			var compositeActiveCues = [];
+		return function(dirtyBit) {
+			var renderer = this,
+				options = this.options,
+				currentTime = this.currentTime,
+				renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
+				styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue,
+				compositeActiveCues = [], cueElements = [], hash = "";
 
 			// Work out what cues are showing...
 			//WHY IS IT SKIPPING CUES?
@@ -570,24 +571,8 @@ var CaptionRenderer = (function() {
 					}));
 				}
 			});
-			
-			// Get the canvas ready if it isn't already
-			styleCueContainer(this);
-			this.containerObject.innerHTML = "";
+
 			if(compositeActiveCues.length){
-				// Define storage for the available cue area, diminished as further cues are added
-				// Cues occupy the largest possible area they can, either by width or height
-				// (depending on whether the `direction` of the cue is vertical or horizontal)
-				// Cues which have an explicit position set do not detract from this area.
-				this.availableCueArea = {
-					"top": 0,
-					"left": 0,
-					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-					"right": this.videoMetrics.width,
-					"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-					"width": this.videoMetrics.width
-				};
-			
 				// Now we render the cues
 				compositeActiveCues.forEach(function(cue) {
 					var cueNode = styleCue(cue,renderCue(cue));
@@ -599,14 +584,37 @@ var CaptionRenderer = (function() {
 					[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
 						element.style.visibility = "hidden";
 					});
-					
-					renderer.containerObject.appendChild(cueNode);
-					positionCue(cueNode,cue,renderer);
+					hash += cue.size+cue.vertical+cue.line+cue.position+cue.align+cueNode.innerHTML.length;
+					cueElements.push([cueNode,cue]);
 				});
-				// Defeat a horrid Chrome 10 video bug
-				// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
-				if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
-					containerObject.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
+				// If any of them are different, we redraw them to the screen.
+				if(dirtyBit || this.hash !== hash){
+					console.log("redrawing");
+					// Get the canvas ready if it isn't already
+					styleCueContainer(this);
+					this.containerObject.innerHTML = "";
+					// Define storage for the available cue area, diminished as further cues are added
+					// Cues occupy the largest possible area they can, either by width or height
+					// (depending on whether the `direction` of the cue is vertical or horizontal)
+					// Cues which have an explicit position set do not detract from this area.
+					this.availableCueArea = {
+						"top": 0,
+						"left": 0,
+						"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+						"right": this.videoMetrics.width,
+						"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+						"width": this.videoMetrics.width
+					};
+					cueElements.forEach(function(arr){
+						renderer.containerObject.appendChild(arr[0]);
+						positionCue(arr[0],arr[1],renderer);
+					});
+					// Defeat a horrid Chrome 10 video bug
+					// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
+					if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
+						containerObject.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
+					}
+					this.hash = hash;
 				}
 			}
 		}
