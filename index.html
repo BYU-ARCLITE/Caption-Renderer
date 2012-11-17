@@ -24,7 +24,10 @@
 		<p><a href="index.html?debug">WebVTT renderer debug mode</a> | <a href="index.html?boundingBox">Size cues by text bounding box</a> | <a href="index.html?highres">High Resolution Mode</a></p>
 		<h2>Media Controls</h2>
 
-		<!-- Include Captionator -->
+		<!-- Include Caption Renderer -->
+		<!--<script type="text/javascript" src="/Ayamel/TimedText/TimedText.js"></script>
+		<script type="text/javascript" src="/Ayamel/TimedText/WebVTT.js"></script>-->
+		<script type="text/javascript" src="js/TextTrack.js"></script>
 		<script type="text/javascript" src="js/caption-renderer.js"></script>
 		
 		<!-- Example Usage -->
@@ -32,10 +35,16 @@
 		<script type="text/javascript">
 			window.addEventListener("load",function() {
 				var videoObject = document.getElementById("videoTest");
-				var renderer = CaptionRenderer(videoObject,null,{
+				var renderer = CaptionRenderer(videoObject, null, {
 					debugMode: !!window.location.search.match(/debug/i),
 					sizeCuesByTextBoundingBox: !!window.location.search.match(/boundingBox/i),
 					enableHighResolution: !!window.location.search.match(/highres/i),
+					preprocess: function(str){
+						return str;
+					},
+					styleCue: function(DOMNode){
+						return DOMNode;
+					}
 				});
 				
 				videoObject.volume = 0;
