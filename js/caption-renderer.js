@@ -314,7 +314,7 @@ var CaptionRenderer = (function() {
 			// There could be a way to measure this live but I haven't thought/heard of it yet...
 			var UA = navigator.userAgent.toLowerCase();
 			if (UA.indexOf("chrome") !== -1) {
-				controlHeight = 32;
+				controlHeight = 35;
 			} else if (UA.indexOf("opera") !== -1) {
 				controlHeight = 25;
 			} else if (UA.indexOf("firefox") !== -1) {
@@ -367,13 +367,13 @@ var CaptionRenderer = (function() {
 		var media, renderer = this,
 			timeupdate = function(){ renderer.currentTime = media.currentTime; },
 			internalTime = 0,
-			containerObject = document.createElement("div");
-		containerObject.className = "captionator-cue-canvas";
+			container = document.createElement("div");
+		container.className = "captionator-cue-canvas";
 		// TODO(silvia): we should only do aria-live on descriptions and that doesn't need visual display
-		containerObject.setAttribute("aria-live","polite");
-		containerObject.setAttribute("aria-atomic","true");
+		container.setAttribute("aria-live","polite");
+		container.setAttribute("aria-atomic","true");
 		
-		this.containerObject = containerObject;
+		this.container = container;
 		this.options = options;
 		this.tracks = [];
 		this.element = element;
@@ -444,16 +444,16 @@ var CaptionRenderer = (function() {
 			Styles and positions a div for displaying cues on a video.
 		*/
 		function styleCueContainer(renderer) {
-			var containerObject = renderer.containerObject;
-			var containerID = containerObject.id;
+			var container = renderer.container;
+			var containerID = container.id;
 			var options = renderer.options;
 			var videoElement = renderer.element;
 			var videoMetrics, baseFontSize, baseLineHeight;
 			
-			if (!containerObject.parentNode) {
+			if (!container.parentNode) {
 				((options.appendCueCanvasTo instanceof HTMLElement)
 					?options.appendCueCanvasTo
-					:document.body).appendChild(containerObject);
+					:document.body).appendChild(container);
 			}
 		
 			// TODO(silvia): we should not really muck with the aria-describedby attribute of the video
@@ -467,7 +467,7 @@ var CaptionRenderer = (function() {
 			baseLineHeight = Math.max(Math.floor(baseFontSize * options.lineHeightRatio),options.minimumLineHeight);
 		
 			// Style node!
-			applyStyles(containerObject,{
+			applyStyles(container,{
 				"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
 				"width": videoMetrics.width + "px",
 				"top": (options.appendCueCanvasTo ? 0 : videoMetrics.top) + "px",
@@ -533,7 +533,7 @@ var CaptionRenderer = (function() {
 			return node;
 		}
 		
-		function defaultStyleCue(cue,node){ return node; }
+		function defaultStyleCue(node,track){ return node; }
 		
 		function defaultHashCue(cue){
 			return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length;
@@ -543,6 +543,7 @@ var CaptionRenderer = (function() {
 			var renderer = this,
 				cache = this.cache,
 				options = this.options,
+				container = this.container,
 				currentTime = this.currentTime,
 				hashCue = typeof options.hashCue === 'function'?options.renderCue:defaultHashCue,
 				renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
@@ -553,7 +554,6 @@ var CaptionRenderer = (function() {
 			//WHY IS IT SKIPPING CUES?
 			this.tracks.forEach(function(track) {
 				if (track.mode === "showing" && track.readyState === TextTrack.LOADED && (track.kind === "captions" || track.kind === "subtitles")) {
-					// Do a reverse sort
 					// Since the render area decreases in size with each successive cue added,
 					// and we want cues which are older to be displayed above cues which are newer,
 					// we sort active cues within each track so that older ones are rendered first.
@@ -563,52 +563,50 @@ var CaptionRenderer = (function() {
 				}
 			});
 
-			if(compositeActiveCues.length){
-				// Now we render the cues
-				compositeActiveCues.forEach(function(cue) {
-					var updateTime, cueNode;
-					cueNode = styleCue(cue,renderCue(cue));
-					cueNode.className = "captionator-cue";
-					
-					//Handle karaoke styling
-					updateTime = timeStyle(cueNode,currentTime);
-					[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
-						element.style.visibility = "hidden";
-					});
-					
-					cueElements.push([cueNode,cue]);
-					
-					hash += hashCue(cue)+updateTime;
+			// Now we render the cues
+			compositeActiveCues.forEach(function(cue) {
+				var updateTime, cueNode;
+				cueNode = styleCue(renderCue(cue),cue.track);
+				cueNode.className = "captionator-cue";
+				
+				//Handle karaoke styling
+				updateTime = timeStyle(cueNode,currentTime);
+				[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
+					element.style.visibility = "hidden";
 				});
-				// If any of them are different, we redraw them to the screen.
-				if(dirtyBit || this.hash !== hash){
-					console.log("redrawing");
-					// Get the canvas ready if it isn't already
-					styleCueContainer(this);
-					this.containerObject.innerHTML = "";
-					// Define storage for the available cue area, diminished as further cues are added
-					// Cues occupy the largest possible area they can, either by width or height
-					// (depending on whether the `direction` of the cue is vertical or horizontal)
-					// Cues which have an explicit position set do not detract from this area.
-					this.availableCueArea = {
-						"top": 0,
-						"left": 0,
-						"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-						"right": this.videoMetrics.width,
-						"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-						"width": this.videoMetrics.width
-					};
-					cueElements.forEach(function(arr){
-						renderer.containerObject.appendChild(arr[0]);
-						positionCue(arr[0],arr[1],renderer);
-					});
-					// Defeat a horrid Chrome 10 video bug
-					// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
-					if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
-						containerObject.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
-					}
-					this.hash = hash;
+				
+				cueElements.push({node:cueNode,cue:cue});
+				
+				hash += hashCue(cue)+updateTime;
+			});
+			// If any of them are different, we redraw them to the screen.
+			if(dirtyBit || (this.hash !== hash)){
+				console.log("redrawing");
+				// Get the canvas ready if it isn't already
+				styleCueContainer(this);
+				container.innerHTML = "";
+				// Define storage for the available cue area, diminished as further cues are added
+				// Cues occupy the largest possible area they can, either by width or height
+				// (depending on whether the `direction` of the cue is vertical or horizontal)
+				// Cues which have an explicit position set do not detract from this area.
+				this.availableCueArea = {
+					"top": 0,
+					"left": 0,
+					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+					"right": this.videoMetrics.width,
+					"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
+					"width": this.videoMetrics.width
+				};
+				cueElements.forEach(function(el){
+					container.appendChild(el.node);
+					positionCue(el.node,el.cue,renderer);
+				});
+				// Defeat a horrid Chrome 10 video bug
+				// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
+				if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
+					container.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
 				}
+				this.hash = hash;
 			}
 		}
 	}());
