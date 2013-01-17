@@ -58,17 +58,15 @@ var CaptionRenderer = (function() {
 				rtlDirCheckRe       = new RegExp('^[^'+ltrChars+']*['+rtlChars+']');
 			return !!rtlDirCheckRe.test(text) ? 'rtl' : (!!ltrDirCheckRe.test(text) ? 'ltr' : '');
 		}
-		return function(DOMNode, cueObject, renderer) {
+		return function(DOMNode, cueObject, renderer, videoMetrics) {
 			// Variables for maintaining render calculations
-			var options = renderer.options;
-			var videoElement = renderer.element;
-			var videoMetrics = renderer.videoMetrics;
-			var cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cuePaddingLR = 0, cuePaddingTB = 0;
-			var cueSize, cueLine, cueVertical = cueObject.vertical, cueSnap = cueObject.snapToLines, cuePosition = cueObject.position;
-			var baseFontSize, basePixelFontSize, baseLineHeight, tmpHeightExclusions;
-			var videoHeightInLines, videoWidthInLines, pixelLineHeight, verticalPixelLineHeight;
-			var maxCueSize = 100, textBoundingBoxWidth = 0, textBoundingBoxPercentage = 0, autoSize = true;
-			var availableCueArea = renderer.availableCueArea;
+			var videoElement = renderer.element,
+				cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cuePaddingLR = 0, cuePaddingTB = 0,
+				cueSize, cueLine, cueVertical = cueObject.vertical, cueSnap = cueObject.snapToLines, cuePosition = cueObject.position,
+				baseFontSize, basePixelFontSize, baseLineHeight, tmpHeightExclusions,
+				videoHeightInLines, videoWidthInLines, pixelLineHeight, verticalPixelLineHeight,
+				maxCueSize = 100, textBoundingBoxWidth = 0, textBoundingBoxPercentage = 0, autoSize = true,
+				availableCueArea = renderer.availableCueArea;
 
 			if (cueVertical === "") {
 				// Calculate text bounding box
@@ -92,9 +90,9 @@ var CaptionRenderer = (function() {
 			}
 			
 			// Calculate font metrics
-			baseFontSize = Math.max(((videoMetrics.height * (options.fontSizeVerticalPercentage/100))/96)*72, options.minimumFontSize);
+			baseFontSize = Math.max(((videoMetrics.height * renderer.fontSizeRatio)/96)*72, renderer.minFontSize);
 			basePixelFontSize = Math.floor((baseFontSize/72)*96);
-			baseLineHeight = Math.max(Math.floor(baseFontSize * options.lineHeightRatio), options.minimumLineHeight);
+			baseLineHeight = Math.max(Math.floor(baseFontSize * renderer.lineHeightRatio), renderer.minLineHeight);
 			pixelLineHeight = Math.ceil((baseLineHeight/72)*96);
 			verticalPixelLineHeight	= pixelLineHeight;
 			
@@ -112,7 +110,7 @@ var CaptionRenderer = (function() {
 			videoWidthInLines = Math.floor(availableCueArea.width / verticalPixelLineHeight);
 			
 			// Calculate cue size and padding
-			if (options.sizeCuesByTextBoundingBox && cueObject.size === 100) {
+			if (renderer.sizeCuesByTextBoundingBox && cueObject.size === 100) {
 				// We assume (given a size of 100) that no explicit size was set.
 				cueSize = textBoundingBoxPercentage;
 			} else {
@@ -215,7 +213,7 @@ var CaptionRenderer = (function() {
 					(checkDirection(String(cueObject.text)) === "rtl"
 						?{"start":"right","middle":"center","end":"left"}
 						:{"start":"left","middle":"center","end":"right"})[cueObject.align],
-				"backgroundColor": "rgba(" + options.cueBackgroundColour.join(",") + ")",
+				"backgroundColor": renderer.cueBgColor,
 				"direction": checkDirection(String(cueObject.text)),
 				"lineHeight": baseLineHeight + "pt",
 				"boxSizing": "border-box"
@@ -293,26 +291,27 @@ var CaptionRenderer = (function() {
 			width: The calculated with of the node
 			controlHeight: If the node is a video and has the `controls` attribute present, the height of the UI controls for the video. Otherwise, zero.
 	*/
-	function getNodeMetrics(DOMNode) {
-		var nodeComputedStyle = window.getComputedStyle(DOMNode,null);
-		var offsetObject = DOMNode;
-		var offsetTop = DOMNode.offsetTop, offsetLeft = DOMNode.offsetLeft;
-		var width = DOMNode, height = 0;
-		var controlHeight = 0;
+	function getNodeMetrics(DOMNode,renderer) {
+		var offsetObject, UA,
+			nodeComputedStyle = window.getComputedStyle(DOMNode,null),
+			width = parseInt(nodeComputedStyle.getPropertyValue("width"),10),
+			height = parseInt(nodeComputedStyle.getPropertyValue("height"),10),
+			offsetTop = 0, offsetLeft = 0, controlHeight = 0;
 		
-		width = parseInt(nodeComputedStyle.getPropertyValue("width"),10);
-		height = parseInt(nodeComputedStyle.getPropertyValue("height"),10);
-		
-		// Slightly verbose expression in order to pass JSHint
-		while (!!(offsetObject = offsetObject.offsetParent)) {
+		for (	offsetObject = DOMNode;
+				(!!offsetObject) && offsetObject !== renderer.appendCueCanvasTo;
+				offsetObject = offsetObject.offsetParent
+		) {
 			offsetTop += offsetObject.offsetTop;
 			offsetLeft += offsetObject.offsetLeft;
 		}
 	
-		if (DOMNode.hasAttribute("controls")) {
+		if (typeof renderer.controlHeight === 'number'){
+			controlHeight = renderer.controlHeight;
+		}else if (DOMNode.hasAttribute("controls")) {
 			// Get heights of default control strip in various browsers
 			// There could be a way to measure this live but I haven't thought/heard of it yet...
-			var UA = navigator.userAgent.toLowerCase();
+			UA = navigator.userAgent.toLowerCase();
 			if (UA.indexOf("chrome") !== -1) {
 				controlHeight = 35;
 			} else if (UA.indexOf("opera") !== -1) {
@@ -323,11 +322,6 @@ var CaptionRenderer = (function() {
 				controlHeight = 44;
 			} else if (UA.indexOf("safari") !== -1) {
 				controlHeight = 25;
-			}
-		} else if (DOMNode._captionatorOptions) {
-			var tmpCaptionatorOptions = DOMNode._captionatorOptions;
-			if (tmpCaptionatorOptions.controlHeight) {
-				controlHeight = parseInt(tmpCaptionatorOptions.controlHeight,10);
 			}
 		}
 	
@@ -346,13 +340,26 @@ var CaptionRenderer = (function() {
 		and the object values are CSS property values as per the spec. This parameter is mandatory.
 	*/
 	function applyStyles(StyleNode, styleObject) {
-		for (var styleName in styleObject) {
+		var styleName;
+		for (styleName in styleObject) {
 			if ({}.hasOwnProperty.call(styleObject, styleName)) {
 				StyleNode.style[styleName] = styleObject[styleName];
 			}
 		}
 	}
 	
+	function defaultRenderCue(cue){
+		var node = document.createElement('div');
+		node.appendChild(cue.getCueAsHTML());
+		return node;
+	}
+	
+	function defaultStyleCue(node,track){ return node; }
+	
+	function defaultHashCue(cue){
+		return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length;
+	}
+		
 	/* CaptionRenderer([dom element],
 						[options - JS Object])
 	
@@ -366,37 +373,30 @@ var CaptionRenderer = (function() {
 		options = options instanceof Object? options : {};
 		var media, renderer = this,
 			timeupdate = function(){ renderer.currentTime = media.currentTime; },
+			container = document.createElement("div"),
 			internalTime = 0,
-			container = document.createElement("div");
+			appendCueCanvasTo = (options.appendCueCanvasTo instanceof HTMLElement)?options.appendCueCanvasTo:null,
+			minFontSize = (typeof(options.minFontSize) === "number")?options.minFontSize:10,			//pt
+			minLineHeight = (typeof(options.minimumLineHeight) === "number")?options.minLineHeight:16,	//pt
+			fontSizeRatio = (typeof(options.fontSizeRatio) === "number")?options.fontSizeRatio:0.045,	//	Caption font size is 4.5% of the video height
+			lineHeightRatio = (typeof(options.lineHeightRatio) === "number")?options.lineHeightRatio:1.3,	//	Caption line height is 1.3 times the font size
+			sizeCuesByTextBoundingBox = !!options.sizeCuesByTextBoundingBox,
+			cueBgColor = (typeof(options.cueBgColor) === "string")?options.cueBgColor:"rgba(0,0,0,0.5)",
+			hashCue = typeof options.hashCue === 'function'?options.hashCue:defaultHashCue,
+			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
+			styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue;
+
 		container.className = "captionator-cue-canvas";
-		// TODO(silvia): we should only do aria-live on descriptions and that doesn't need visual display
+		// TODO: we should only do aria-live on descriptions and that doesn't need visual display
 		container.setAttribute("aria-live","polite");
 		container.setAttribute("aria-atomic","true");
 		
 		this.container = container;
-		this.options = options;
 		this.tracks = [];
 		this.element = element;
 		this.hash = "";
 		
 		element.classList.add("captioned");
-		
-		// Apply defaults
-		if (typeof(options.minimumFontSize) !== "number") {
-			options.minimumFontSize = 10; //pt
-		}
-		if (typeof(options.minimumLineHeight) !== "number") {
-			options.minimumLineHeight = 16; //pt
-		}
-		if (typeof(options.fontSizeVerticalPercentage) !== "number") {
-			options.fontSizeVerticalPercentage = 4.5;	//	Caption font size is 4.5% of the video height
-		}
-		if (typeof(options.lineHeightRatio) !== "number") {
-			options.lineHeightRatio = 1.5;				//	Caption line height is 1.3 times the font size
-		}
-		if (!(options.cueBackgroundColour instanceof Array)) {
-			options.cueBackgroundColour = [0,0,0,0.5];	//	R,G,B,A
-		}
 		
 		window.addEventListener("resize", this.rebuildCaptions.bind(this,true) ,false);
 		this.bindMediaElement = function(element) {
@@ -414,6 +414,108 @@ var CaptionRenderer = (function() {
 					try{ this.tracks.forEach(function(track) { track.currentTime = internalTime; }); }
 					catch(error) {}
 					this.rebuildCaptions(false);
+				},
+				enumerable: true
+			},
+			appendCueCanvasTo: {
+				get: function(){ return appendCueCanvasTo; },
+				set: function(val){
+					appendCueCanvasTo = (val instanceof HTMlElement)?val:null;
+					this.rebuildCaptions(true);
+					return appendCueCanvasTo;
+				},
+				enumerable: true
+			},
+			minFontSize: {
+				get: function(){ return minFontSize; },
+				set: function(val){
+					val = +val;
+					if(!isNaN(val)){
+						minFontSize = val;
+						this.rebuildCaptions(true);
+					}
+					return minFontSize;
+				},
+				enumerable: true
+			},
+			minLineHeight: {
+				get: function(){ return minLineHeight; },
+				set: function(val){
+					val = +val;
+					if(!isNaN(val)){
+						minLineHeight = val;
+						this.rebuildCaptions(true);
+					}
+					return minLineHeight;
+				},
+				enumerable: true
+			},
+			fontSizeRatio: {
+				get: function(){ return fontSizeRatio; },
+				set: function(val){
+					val = +val;
+					if(!isNaN(val)){
+						fontSizeRatio = val;
+						this.rebuildCaptions(true);
+					}
+					return fontSizeRatio;
+				},
+				enumerable: true
+			},
+			lineHeightRatio: {
+				get: function(){ return lineHeightRatio; },
+				set: function(val){
+					val = +val;
+					if(!isNaN(val)){
+						lineHeightRatio = val;
+						this.rebuildCaptions(true);
+					}
+					return lineHeightRatio;
+				},
+				enumerable: true
+			},
+			sizeCuesByTextBoundingBox: {
+				get: function(){ return sizeCuesByTextBoundingBox; },
+				set: function(val){
+					sizeCuesByTextBoundingBox = !!val;
+					this.rebuildCaptions(true);
+					return sizeCuesByTextBoundingBox;
+				},
+				enumerable: true
+			},
+			cueBgColor: {
+				get: function(){ return cueBgColor; },
+				set: function(val){
+					cueBgColor = ""+val;
+					this.rebuildCaptions(true);
+					return cueBgColor;
+				},
+				enumerable: true
+			},
+			hashCue: {
+				get: function(){ return hashCue; },
+				set: function(val){
+					hashCue = typeof val === 'function'?val:defaultHashCue
+					this.rebuildCaptions(true);
+					return hashCue;
+				},
+				enumerable: true
+			},
+			renderCue: {
+				get: function(){ return renderCue; },
+				set: function(val){
+					renderCue = typeof val === 'function'?val:defaultRenderCue
+					this.rebuildCaptions(true);
+					return renderCue;
+				},
+				enumerable: true
+			},
+			styleCue:  {
+				get: function(){ return styleCue; },
+				set: function(val){
+					styleCue = typeof val === 'function'?val:defaultStyleCue
+					this.rebuildCaptions(true);
+					return styleCue;
 				},
 				enumerable: true
 			}
@@ -444,15 +546,14 @@ var CaptionRenderer = (function() {
 			Styles and positions a div for displaying cues on a video.
 		*/
 		function styleCueContainer(renderer) {
-			var container = renderer.container;
-			var containerID = container.id;
-			var options = renderer.options;
-			var videoElement = renderer.element;
-			var videoMetrics, baseFontSize, baseLineHeight;
+			var container = renderer.container,
+				containerID = container.id,
+				videoElement = renderer.element,
+				videoMetrics, baseFontSize, baseLineHeight;
 			
 			if (!container.parentNode) {
-				((options.appendCueCanvasTo instanceof HTMLElement)
-					?options.appendCueCanvasTo
+				((renderer.appendCueCanvasTo instanceof HTMLElement)
+					?renderer.appendCueCanvasTo
 					:document.body).appendChild(container);
 			}
 		
@@ -462,23 +563,23 @@ var CaptionRenderer = (function() {
 			}
 		
 			// Set up font metrics
-			videoMetrics = getNodeMetrics(videoElement);
-			baseFontSize = Math.max(((videoMetrics.height * (options.fontSizeVerticalPercentage/100))/96)*72,options.minimumFontSize);
-			baseLineHeight = Math.max(Math.floor(baseFontSize * options.lineHeightRatio),options.minimumLineHeight);
+			videoMetrics = getNodeMetrics(videoElement,renderer);
+			baseFontSize = Math.max(((videoMetrics.height * renderer.fontSizeRatio)/96)*72,renderer.minFontSize);
+			baseLineHeight = Math.max(Math.floor(baseFontSize * renderer.lineHeightRatio),renderer.minLineHeight);
 		
 			// Style node!
 			applyStyles(container,{
 				"height": (videoMetrics.height - videoMetrics.controlHeight) + "px",
 				"width": videoMetrics.width + "px",
-				"top": (options.appendCueCanvasTo ? 0 : videoMetrics.top) + "px",
-				"left": (options.appendCueCanvasTo ? 0 : videoMetrics.left) + "px",
+				"top": videoMetrics.top + "px",
+				"left": videoMetrics.left + "px",
 				"color": "white",
 				"fontFamily": "Verdana, Helvetica, Arial, sans-serif",
 				"fontSize": baseFontSize + "pt",
 				"lineHeight": baseLineHeight + "pt"
 			});
 		
-			renderer.videoMetrics = videoMetrics;
+			return videoMetrics;
 		}
 		
 		function parse_timestamp(str){
@@ -527,28 +628,15 @@ var CaptionRenderer = (function() {
 			return pastNode?pastNode.dataset.seconds:0;
 		}
 		
-		function defaultRenderCue(cue){
-			var node = document.createElement('div');
-			node.appendChild(cue.getCueAsHTML());
-			return node;
-		}
-		
-		function defaultStyleCue(node,track){ return node; }
-		
-		function defaultHashCue(cue){
-			return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length;
-		}
-		
 		return function(dirtyBit) {
 			var renderer = this,
 				cache = this.cache,
-				options = this.options,
 				container = this.container,
 				currentTime = this.currentTime,
-				hashCue = typeof options.hashCue === 'function'?options.renderCue:defaultHashCue,
-				renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
-				styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue,
-				compositeActiveCues = [], cueElements = [], hash = "";
+				hashCue = renderer.hashCue,
+				renderCue = renderer.renderCue,
+				styleCue = renderer.styleCue,
+				videoMetrics, compositeActiveCues = [], cueElements = [], hash = "";
 
 			// Work out what cues are showing...
 			//WHY IS IT SKIPPING CUES?
@@ -581,9 +669,8 @@ var CaptionRenderer = (function() {
 			});
 			// If any of them are different, we redraw them to the screen.
 			if(dirtyBit || (this.hash !== hash)){
-				console.log("redrawing");
 				// Get the canvas ready if it isn't already
-				styleCueContainer(this);
+				videoMetrics = styleCueContainer(this);
 				container.innerHTML = "";
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
@@ -592,14 +679,14 @@ var CaptionRenderer = (function() {
 				this.availableCueArea = {
 					"top": 0,
 					"left": 0,
-					"bottom": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-					"right": this.videoMetrics.width,
-					"height": (this.videoMetrics.height-this.videoMetrics.controlHeight),
-					"width": this.videoMetrics.width
+					"bottom": (videoMetrics.height-videoMetrics.controlHeight),
+					"right": videoMetrics.width,
+					"height": (videoMetrics.height-videoMetrics.controlHeight),
+					"width": videoMetrics.width
 				};
 				cueElements.forEach(function(el){
 					container.appendChild(el.node);
-					positionCue(el.node,el.cue,renderer);
+					positionCue(el.node,el.cue,renderer,videoMetrics);
 				});
 				// Defeat a horrid Chrome 10 video bug
 				// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
@@ -616,13 +703,12 @@ var CaptionRenderer = (function() {
 	*/
 	CaptionRenderer.prototype.processVideoElement = function(videoElement,options) {
 		options = options instanceof Object? options : {};
-		var trackList = this.tracks;
-		var renderer = this;
-		var language = navigator.language || navigator.userLanguage;
-		var defaultLanguage = options.language;
-		var globalLanguage = defaultLanguage || language.split("-")[0];
-		var enabledDefaultTrack = false;
-		var elements = [].slice.call(videoElement.querySelectorAll("track"),0);
+		var renderer = this,
+			trackList = this.tracks,
+			language = navigator.language || navigator.userLanguage,
+			defaultLanguage = options.language,
+			globalLanguage = defaultLanguage || language.split("-")[0],
+			elements = [].slice.call(videoElement.querySelectorAll("track"),0);
 		
 		if(elements.length === 0){ return; }
 		
@@ -634,7 +720,6 @@ var CaptionRenderer = (function() {
 							trackElement.getAttribute("label"),
 							trackElement.getAttribute("srclang").split("-")[0]);
 			
-			trackObject
 			trackObject.loadTrack(sources.length > 0?sources:trackElement.getAttribute("src"));
 			
 			// Now determine whether the track is visible by default.
