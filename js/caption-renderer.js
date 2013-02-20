@@ -44,7 +44,11 @@ var CaptionRenderer = (function() {
 				}
 			});
 			return chars;
-		};
+		}
+		function getspanchars(DOMNode,fontSize,lineHeight,chars) {
+			[].push.apply(chars,DOMNode.querySelectorAll('.captionator-cue-character'));
+			return chars;
+		}
 		/* checkDirection(text)
 			Determines whether the text string passed into the function is an RTL (right to left) or LTR (left to right) string.
 			RETURNS: 'rtl' if the text is a right to left string, 'ltr' if the text is a left to right string, or an empty string
@@ -58,7 +62,7 @@ var CaptionRenderer = (function() {
 				rtlDirCheckRe       = new RegExp('^[^'+ltrChars+']*['+rtlChars+']');
 			return !!rtlDirCheckRe.test(text) ? 'rtl' : (!!ltrDirCheckRe.test(text) ? 'ltr' : '');
 		}
-		return function(DOMNode, cueObject, renderer, videoMetrics) {
+		return function(DOMNode, cueObject, renderer, videoMetrics, vert) {
 			// Variables for maintaining render calculations
 			var videoElement = renderer.element,
 				cueX = 0, cueY = 0, cueWidth = 0, cueHeight = 0, cuePaddingLR = 0, cuePaddingTB = 0,
@@ -154,7 +158,7 @@ var CaptionRenderer = (function() {
 				
 				(function(){	// Split into characters, and continue calculating width & positioning with new info
 					var currentLine = 0, characterPosition = 0,
-						characters = spanify(DOMNode,basePixelFontSize,verticalPixelLineHeight,[]),
+						characters = (vert?spanify:getspanchars)(DOMNode,basePixelFontSize,verticalPixelLineHeight,[]),
 						characterCount = characters.length,
 						charactersPerLine = Math.floor((cueHeight-cuePaddingTB*2)/basePixelFontSize),
 						lineCount = Math.ceil(characterCount/charactersPerLine),
@@ -350,14 +354,26 @@ var CaptionRenderer = (function() {
 	
 	function defaultRenderCue(cue){
 		var node = document.createElement('div');
-		node.appendChild(cue.getCueAsHTML());
+		node.appendChild(cue.getCueAsHTML(cue.track.kind==='subtitles'));
 		return node;
 	}
 	
 	function defaultStyleCue(node,track){ return node; }
 	
-	function defaultHashCue(cue){
-		return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length;
+	function cueTime(cue,currentTime){
+		//find the last timestamp in the past and the first in the future
+		var i, node, ntime, otime = 0,
+			timeNodes = cue.getCueAsHTML(cue.track.kind==='subtitles').querySelectorAll("i[data-target=timestamp]");
+		for(i=0;node=timeNodes[i];i++){
+			ntime = node.dataset.seconds;
+			if(ntime > currentTime){ break; }
+			otime = ntime;
+		}
+		return otime;
+	}
+	
+	function defaultHashCue(cue,currentTime){
+		return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length+cueTime(cue,currentTime);
 	}
 		
 	/* CaptionRenderer([dom element],
@@ -387,9 +403,9 @@ var CaptionRenderer = (function() {
 			styleCue = typeof options.styleCue === 'function'?options.styleCue:defaultStyleCue;
 
 		container.className = "captionator-cue-canvas";
-		// TODO: we should only do aria-live on descriptions and that doesn't need visual display
-		container.setAttribute("aria-live","polite");
-		container.setAttribute("aria-atomic","true");
+		//TODO: we should do aria-live on descriptions and those doesn't need visual display
+		//container.setAttribute("aria-live","polite");
+		//container.setAttribute("aria-atomic","true");
 		
 		this.container = container;
 		this.tracks = [];
@@ -421,7 +437,7 @@ var CaptionRenderer = (function() {
 				get: function(){ return appendCueCanvasTo; },
 				set: function(val){
 					appendCueCanvasTo = (val instanceof HTMlElement)?val:null;
-					this.rebuildCaptions(true);
+					this.refreshLayout();
 					return appendCueCanvasTo;
 				},
 				enumerable: true
@@ -432,7 +448,7 @@ var CaptionRenderer = (function() {
 					val = +val;
 					if(!isNaN(val)){
 						minFontSize = val;
-						this.rebuildCaptions(true);
+						this.refreshLayout();
 					}
 					return minFontSize;
 				},
@@ -444,7 +460,7 @@ var CaptionRenderer = (function() {
 					val = +val;
 					if(!isNaN(val)){
 						minLineHeight = val;
-						this.rebuildCaptions(true);
+						this.refreshLayout();
 					}
 					return minLineHeight;
 				},
@@ -456,7 +472,7 @@ var CaptionRenderer = (function() {
 					val = +val;
 					if(!isNaN(val)){
 						fontSizeRatio = val;
-						this.rebuildCaptions(true);
+						this.refreshLayout();
 					}
 					return fontSizeRatio;
 				},
@@ -468,7 +484,7 @@ var CaptionRenderer = (function() {
 					val = +val;
 					if(!isNaN(val)){
 						lineHeightRatio = val;
-						this.rebuildCaptions(true);
+						this.refreshLayout();
 					}
 					return lineHeightRatio;
 				},
@@ -478,7 +494,7 @@ var CaptionRenderer = (function() {
 				get: function(){ return sizeCuesByTextBoundingBox; },
 				set: function(val){
 					sizeCuesByTextBoundingBox = !!val;
-					this.rebuildCaptions(true);
+					this.refreshLayout();
 					return sizeCuesByTextBoundingBox;
 				},
 				enumerable: true
@@ -495,8 +511,7 @@ var CaptionRenderer = (function() {
 			hashCue: {
 				get: function(){ return hashCue; },
 				set: function(val){
-					hashCue = typeof val === 'function'?val:defaultHashCue
-					this.rebuildCaptions(true);
+					hashCue = typeof val === 'function'?val:defaultHashCue;
 					return hashCue;
 				},
 				enumerable: true
@@ -504,8 +519,8 @@ var CaptionRenderer = (function() {
 			renderCue: {
 				get: function(){ return renderCue; },
 				set: function(val){
-					renderCue = typeof val === 'function'?val:defaultRenderCue
-					this.rebuildCaptions(true);
+					renderCue = typeof val === 'function'?val:defaultRenderCue;
+					this.refreshLayout();
 					return renderCue;
 				},
 				enumerable: true
@@ -513,8 +528,8 @@ var CaptionRenderer = (function() {
 			styleCue:  {
 				get: function(){ return styleCue; },
 				set: function(val){
-					styleCue = typeof val === 'function'?val:defaultStyleCue
-					this.rebuildCaptions(true);
+					styleCue = typeof val === 'function'?val:defaultStyleCue;
+					this.refreshLayout();
 					return styleCue;
 				},
 				enumerable: true
@@ -541,7 +556,7 @@ var CaptionRenderer = (function() {
 		return null;			
 	};
 	
-	CaptionRenderer.prototype.rebuildCaptions = (function(){
+	(function(){
 		/* styleCueContainer(renderer)
 			Styles and positions a div for displaying cues on a video.
 		*/
@@ -628,7 +643,7 @@ var CaptionRenderer = (function() {
 			return pastNode?pastNode.dataset.seconds:0;
 		}
 		
-		return function(dirtyBit) {
+		CaptionRenderer.prototype.rebuildCaptions = function(dirtyBit) {
 			var renderer = this,
 				cache = this.cache,
 				container = this.container,
@@ -636,7 +651,7 @@ var CaptionRenderer = (function() {
 				hashCue = renderer.hashCue,
 				renderCue = renderer.renderCue,
 				styleCue = renderer.styleCue,
-				videoMetrics, compositeActiveCues = [], cueElements = [], hash = "";
+				videoMetrics, compositeActiveCues = [], hash = "";
 
 			// Work out what cues are showing...
 			//WHY IS IT SKIPPING CUES?
@@ -651,43 +666,43 @@ var CaptionRenderer = (function() {
 				}
 			});
 
-			// Now we render the cues
-			compositeActiveCues.forEach(function(cue) {
-				var updateTime, cueNode;
-				cueNode = styleCue(renderCue(cue),cue.track);
-				cueNode.className = "captionator-cue";
-				
-				//Handle karaoke styling
-				updateTime = timeStyle(cueNode,currentTime);
-				[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
-					element.style.visibility = "hidden";
-				});
-				
-				cueElements.push({node:cueNode,cue:cue});
-				
-				hash += hashCue(cue)+updateTime;
-			});
 			// If any of them are different, we redraw them to the screen.
-			if(dirtyBit || (this.hash !== hash)){
+			if(!dirtyBit){
+				hash = compositeActiveCues.map(function(cue){ return hashCue(cue,currentTime); }).join();
+				dirtyBit = (this.hash !== hash);
+			}
+			if(dirtyBit){
 				// Get the canvas ready if it isn't already
+				container.style.visibility = "hidden";
 				videoMetrics = styleCueContainer(this);
 				container.innerHTML = "";
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
-				// (depending on whether the `direction` of the cue is vertical or horizontal)
+				// (depending on whether the 'direction' of the cue is vertical or horizontal)
 				// Cues which have an explicit position set do not detract from this area.
 				this.availableCueArea = {
-					"top": 0,
-					"left": 0,
+					"top": 0, "left": 0,
 					"bottom": (videoMetrics.height-videoMetrics.controlHeight),
 					"right": videoMetrics.width,
 					"height": (videoMetrics.height-videoMetrics.controlHeight),
 					"width": videoMetrics.width
 				};
-				cueElements.forEach(function(el){
-					container.appendChild(el.node);
-					positionCue(el.node,el.cue,renderer,videoMetrics);
+				compositeActiveCues.forEach(function(cue) {
+					var updateTime, cueNode;
+					cueNode = styleCue(renderCue(cue),cue.track);
+					cueNode.className = "captionator-cue";
+					cueNode._cue = cue;
+					
+					//Handle karaoke styling
+					timeStyle(cueNode,currentTime);
+					[].forEach.call(cueNode.querySelectorAll('[data-future]'),function(element){
+						element.style.visibility = "hidden";
+					});
+					
+					container.appendChild(cueNode);
+					positionCue(cueNode,cue,renderer,videoMetrics,true);
 				});
+				container.style.visibility = "visible";
 				// Defeat a horrid Chrome 10 video bug
 				// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
 				if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
@@ -695,7 +710,38 @@ var CaptionRenderer = (function() {
 				}
 				this.hash = hash;
 			}
-		}
+		};
+		
+		CaptionRenderer.prototype.refreshLayout = function() {
+			var renderer = this,
+				container = this.container,
+				videoMetrics;
+
+			// Get the canvas ready
+			container.style.visibility = "hidden";
+			videoMetrics = styleCueContainer(this);
+		
+			// Define storage for the available cue area, diminished as further cues are added
+			// Cues occupy the largest possible area they can, either by width or height
+			// (depending on whether the 'direction' of the cue is vertical or horizontal)
+			// Cues which have an explicit position set do not detract from this area.
+			this.availableCueArea = {
+				"top": 0, "left": 0,
+				"bottom": (videoMetrics.height-videoMetrics.controlHeight),
+				"right": videoMetrics.width,
+				"height": (videoMetrics.height-videoMetrics.controlHeight),
+				"width": videoMetrics.width
+			};
+			[].forEach.call(container.childNodes,function(node) {
+				positionCue(node,node._cue,renderer,videoMetrics,false);
+			});
+			container.style.visibility = "visible";
+			// Defeat a horrid Chrome 10 video bug
+			// http://stackoverflow.com/questions/5289854/chrome-10-custom-video-interface-problem/5400438#5400438
+			if (window.navigator.userAgent.toLowerCase().indexOf("chrome/10") > -1) {	
+				container.style.backgroundColor = "rgba(0,0,0," + (Math.random()/100) + ")";
+			}
+		};
 	}());
 	
 	/* processVideoElement(videoElement <HTMLVideoElement>,
