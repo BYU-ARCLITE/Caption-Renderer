@@ -24,6 +24,7 @@
 	position: absolute;
 	overflow: hidden;
 	box-sizing: border-box;
+	-moz-box-sizing: border-box;
 }
 
 .captionator-cue {

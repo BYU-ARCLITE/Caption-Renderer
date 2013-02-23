@@ -372,8 +372,16 @@ var CaptionRenderer = (function() {
 		return otime;
 	}
 	
+	function hashCode(str){
+		var hash, i;
+		for(hash = i = 0; i < str.length; i++){
+			hash = ((hash<<5)-hash+str.charCodeAt(i))|0; //bitwise or forces to 32-bit integer
+		}
+		return hash;
+	};
+	
 	function defaultHashCue(cue,currentTime){
-		return cue.size+cue.vertical+cue.line+cue.position+cue.align+cue.text.length+cueTime(cue,currentTime);
+		return cue.size+cue.vertical+cue.line+cue.position+cue.align+hashCode(cue.text)+cueTime(cue,currentTime);
 	}
 		
 	/* CaptionRenderer([dom element],
@@ -414,7 +422,7 @@ var CaptionRenderer = (function() {
 		
 		element.classList.add("captioned");
 		
-		window.addEventListener("resize", this.rebuildCaptions.bind(this,true) ,false);
+		window.addEventListener("resize", this.refreshLayout.bind(this) ,false);
 		this.bindMediaElement = function(element) {
 			media && media.removeEventListener('timeupdate',timeupdate,false);
 			media = element;
