@@ -146,7 +146,7 @@ var CaptionRenderer = (function() {
 				DOMNode.style.left = cueX + "px";
 				
 				if (cueSnap) {
-					cueHeight = Math.ceil(DOMNode.scrollHeight/pixelLineHeight)*pixelLineHeight;
+					cueHeight = Math.round(DOMNode.scrollHeight/pixelLineHeight)*pixelLineHeight;
 					if(cueLine === 'auto'){
 						cueY = availableCueArea.height + availableCueArea.top - cueHeight;
 					}else{
