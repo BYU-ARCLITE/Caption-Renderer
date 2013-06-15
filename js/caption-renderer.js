@@ -1,10 +1,3 @@
-/*
-	Captionator 0.5.1 [CaptionCrunch]
-	Christopher Giffard, 2011
-	Share and enjoy
-
-	https://github.com/cgiffard/Captionator
-*/
 var CaptionRenderer = (function(global) {
 	"use strict";
 
@@ -152,8 +145,6 @@ var CaptionRenderer = (function(global) {
 			cueLine =	(cueObject.line !== "auto")?parseFloat(cueObject.line):
 						(cueVertical === "")?"auto":
 						videoWidthInLines;
-			
-		
 			
 			if (cueVertical === "") {
 				if (autoSize) { // Don't squish the text
@@ -383,8 +374,9 @@ var CaptionRenderer = (function(global) {
 			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue;
 
 		container.id = containerID;
-		container.className = "captionator-cue-canvas";
-		
+		container.className = "captionator-cue-canvas";	
+		container.setAttribute("aria-live","assertive");
+	
 		if (String(element.getAttribute("aria-describedby")).indexOf(containerID) === -1) {
 			element.setAttribute("aria-describedby",(element.hasAttribute("aria-describedby") ? element.getAttribute("aria-describedby") + " " : "")+containerID);
 		}
@@ -631,29 +623,21 @@ var CaptionRenderer = (function(global) {
 				hashCue = renderer.hashCue,
 				renderCue = renderer.renderCue,
 				videoMetrics = getDisplayMetrics(this),
-				compositeActiveCues = [],
+				activeTracks, currentNodes,
 				hash = "", timeHash = "";
 
 			// Work out what cues are showing...
 			//WHY IS IT SKIPPING CUES?
-			this.tracks.forEach(function(track) {
-				if (track.mode === "showing" && track.readyState === TextTrack.LOADED){
-					if(track.kind === "captions" || track.kind === "subtitles"/* || track.kind === "descriptions")*/) {
-						// Since the render area decreases in size with each successive cue added,
-						// and we want cues which are older to be displayed above cues which are newer,
-						// we sort active cues within each track so that older ones are rendered first.
-						[].push.apply(compositeActiveCues,[].slice.call(track.activeCues,0).sort(function(cueA, cueB) {
-							return (cueA.startTime > cueB.startTime)? -1 : 1;
-						}));
-					}
-					//TODO: we should do aria-live on descriptions and those don't need visual display
-					//container.setAttribute("aria-live","polite");
-					//container.setAttribute("aria-atomic","true");
+			activeTracks = this.tracks.filter(function(track) {
+				return track.mode === "showing" && track.readyState === TextTrack.LOADED;
+			});
+			activeTracks.forEach(function(track){
+				if(track.kind === "captions" || track.kind === "subtitles" || track.kind === "descriptions") {
+					hash += [].map.call(track.activeCues,function(cue){ return hashCue(cue); }).join();
 				}
 			});
 
 			// If any of them are different, we redraw them to the screen.
-			hash = compositeActiveCues.map(function(cue){ return hashCue(cue); }).join();
 			if(dirtyBit || (this.hash !== hash)){
 				// Get the canvas ready if it isn't already
 				container.style.visibility = "hidden";
@@ -675,24 +659,29 @@ var CaptionRenderer = (function(global) {
 						nObj.cleanup();
 					}
 				});
-				this.currentNodes = compositeActiveCues.map(function(cue){
-					var nObj = renderCue(cue);
-					nObj.cue = cue;
-					return nObj;
-				});
-				this.timeHash = "";
-				this.currentNodes.forEach(function(nObj){
-					var node = nObj.node;
-					node.className = "captionator-cue";
-					
-					//Handle karaoke styling
-					timeHash += markTimes(node,currentTime);
-					timeStyle(node);
-					
-					container.appendChild(node);
-					positionCue(node,nObj.cue,renderer,videoMetrics,true);
+				
+				currentNodes = [];
+				activeTracks.forEach(function(track){
+					track.activeCues.forEach(function(cue){
+						var nObj = renderCue(cue,track.kind),
+							node = nObj.node;
+							
+						nObj.cue = cue;
+						node.className = "captionator-cue";
+						
+						//Handle karaoke styling
+						timeHash += markTimes(node,currentTime);
+						timeStyle(node);
+						
+						container.appendChild(node);
+						positionCue(node,nObj.cue,renderer,videoMetrics,true);
+						
+						currentNodes.push(nObj);
+					});
 				});
 				container.style.visibility = "visible";
+				
+				this.currentNodes = currentNodes;
 				this.hash = hash;
 				this.timeHash = timeHash;
 			}else{
