@@ -312,10 +312,13 @@ var CaptionRenderer = (function(global) {
 		});
 	}
 	
-	function defaultRenderCue(cue){
+	function defaultRenderCue(renderedCue,area,kind){
 		var node = document.createElement('div');
-		node.appendChild(cue.getCueAsHTML(cue.track.kind==='subtitles'));
-		return {node:node};
+		node.appendChild(cue.getCueAsHTML(kind==='subtitles'));
+		if(kind === 'descriptions'){
+			node.setAttribute('aria-live','assertive');
+		}
+		renderedCue.node = node;
 	}
 	
 	function cueTime(cue,currentTime){
@@ -709,7 +712,7 @@ var CaptionRenderer = (function(global) {
 				newCues = [];
 				activeTracks.forEach(function(track){
 					track.activeCues.forEach(function(cue){
-						var rendered, cached, autoPos;
+						var rendered, cached, node, autoPos;
 						
 						cached = renderer.renderedCues.some(function(old){
 							if(old.cue === cue){
@@ -726,13 +729,18 @@ var CaptionRenderer = (function(global) {
 							autoPos = track.kind === "captions" || track.kind === "subtitles";
 							rendered = new RenderedCue(cue,autoPos);
 							renderCue(rendered,renderer.availableCueArea,track.kind);
+							node = rendered.node;
 							
-							if(!(rendered.node instanceof HTMLElement)){
+							if(!(node instanceof HTMLElement)){
 								return;
 							}
 							
+							if(!node.hasAttribute('lang')){
+								node.setAttribute('lang',track.language);
+							}
+							
 							if(!autoPos){
-								rendered.node.style.visibility = "hidden";
+								node.style.visibility = "hidden";
 							}
 							
 							rendered.updateTime(currentTime);
