@@ -4,6 +4,8 @@
 	overflow: hidden;
 	box-sizing: border-box;
 	-moz-box-sizing: border-box;
+	color: white;
+	font-family: Verdana, Helvetica, Arial, sans-serif;
 }
 
 /*visually hidden, but accessible to screen readers*/
@@ -11,6 +13,8 @@
 	pointer-events: none;
 	position: absolute !important;
 	opacity: 0;
+	color: white;
+	font-family: Verdana, Helvetica, Arial, sans-serif;
 }
 
 .caption-cue {
@@ -27,7 +31,7 @@
 
 .caption-cue span[data-voice]:before {
 	content: attr(data-voice);
-	color:red;
+	color: red;
 	margin-right: 0.5em;
 }
 

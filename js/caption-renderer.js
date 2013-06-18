@@ -1,6 +1,6 @@
 var CaptionRenderer = (function(global) {
 	"use strict";
-
+	
 	/* checkDirection(text)
 		Determines whether the text string passed into the function is an RTL (right to left) or LTR (left to right) string.
 		RETURNS: 'rtl' if the text is a right to left string or 'ltr' if the text is a left to right string.
@@ -313,7 +313,9 @@ var CaptionRenderer = (function(global) {
 	}
 	
 	function defaultRenderCue(renderedCue,area,kind){
-		var node = document.createElement('div');
+		var node;
+		if(kind === "chapters" || kind === "metadata"){ return; }
+		node = document.createElement('div');
 		node.appendChild(renderedCue.cue.getCueAsHTML(kind==='subtitles'));
 		renderedCue.node = node;
 	}
@@ -374,9 +376,11 @@ var CaptionRenderer = (function(global) {
 			sizeCuesByTextBoundingBox = !!options.sizeCuesByTextBoundingBox,
 			cueBgColor = (typeof(options.cueBgColor) === "string")?options.cueBgColor:"rgba(0,0,0,0.5)",
 			hashCue = typeof options.hashCue === 'function'?options.hashCue:defaultHashCue,
-			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue;
+			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
+			showDescriptions = !!options.showDescriptions;
 
 		container.className = "caption-cue-canvas";
+		container.setAttribute("aria-live","off");
 		
 		descriptor.id = descriptorId;
 		descriptor.className = "caption-desc-area";	
@@ -507,6 +511,18 @@ var CaptionRenderer = (function(global) {
 					return renderCue;
 				},
 				enumerable: true
+			},
+			showDescriptions: {
+				get: function(){ return showDescriptions; },
+				set: function(val){
+					val = !!val;
+					if(showDescriptions !== val){
+						showDescriptions = val;
+						this.refreshLayout();
+					}
+					return showDescriptions;
+				},
+				enumerable: true				
 			}
 		});
 	}
@@ -535,25 +551,21 @@ var CaptionRenderer = (function(global) {
 			Styles and positions a div for displaying cues on a video.
 		*/
 		function styleCueContainer(renderer,videoMetrics) {
-			var container = renderer.container,
-				videoElement = renderer.element,
-				videoMetrics, baseFontSize, baseLineHeight;
+			var baseFontSize = Math.max(((videoMetrics.height * renderer.fontSizeRatio)/96)*72,renderer.minFontSize),
+				baseLineHeight = Math.max(Math.floor(baseFontSize * renderer.lineHeightRatio),renderer.minLineHeight),
+				styles = {
+					"height": videoMetrics.height + "px",
+					"width": videoMetrics.width + "px",
+					"top": videoMetrics.top + "px",
+					"left": videoMetrics.left + "px",
+					"fontSize": baseFontSize + "pt",
+					"lineHeight": baseLineHeight + "pt"
+				};
 		
-			// Set up font metrics
-			baseFontSize = Math.max(((videoMetrics.height * renderer.fontSizeRatio)/96)*72,renderer.minFontSize);
-			baseLineHeight = Math.max(Math.floor(baseFontSize * renderer.lineHeightRatio),renderer.minLineHeight);
-		
-			// Style node!
-			applyStyles(container,{
-				"height": videoMetrics.height + "px",
-				"width": videoMetrics.width + "px",
-				"top": videoMetrics.top + "px",
-				"left": videoMetrics.left + "px",
-				"color": "white",
-				"fontFamily": "Verdana, Helvetica, Arial, sans-serif",
-				"fontSize": baseFontSize + "pt",
-				"lineHeight": baseLineHeight + "pt"
-			});
+			applyStyles(renderer.container,styles);
+			if(renderer.showDescriptions){
+				applyStyles(renderer.descriptor,styles);
+			}
 		}
 		
 		function parse_timestamp(str){
@@ -620,7 +632,7 @@ var CaptionRenderer = (function(global) {
 			Auxilliary object for keeping track of a cue that is currently active with a rendered representation.
 			Provides the interface for interacting with custom render functions.
 		*/
-		function RenderedCue(cue, autoPos){
+		function RenderedCue(renderer, cue, autoPos){
 			var node = null, gc = function(){};
 			
 			this.cue = cue;
@@ -644,6 +656,17 @@ var CaptionRenderer = (function(global) {
 						return gc;
 					},
 					get: function(){ return gc; },
+					enumerable: true
+				},
+				visible: {
+					get: function(){
+						if(!this.node){ return false; }
+						switch(this.node.parentNode){
+						case renderer.container: return true;
+						case renderer.descriptor: return renderer.showDescriptions;
+						default: return false;
+						}
+					},
 					enumerable: true
 				}
 			});
@@ -693,8 +716,8 @@ var CaptionRenderer = (function(global) {
 
 			// If any of them are different, we redraw them to the screen.
 			if(dirtyBit || (this.hash !== hash)){
-				// Get the canvas ready if it isn't already
-				container.style.visibility = "hidden";
+				container.style.opacity = 0;
+				descriptor.style.opacity = 0;
 				styleCueContainer(this,videoMetrics);
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
@@ -726,7 +749,7 @@ var CaptionRenderer = (function(global) {
 							timeHash += rendered.timeHash;
 						}else{
 							autoPos = track.kind !== "descriptions" && track.kind !== "metadata";
-							rendered = new RenderedCue(cue,autoPos);
+							rendered = new RenderedCue(renderer,cue,autoPos);
 							renderCue(rendered,renderer.availableCueArea,track.kind);
 							node = rendered.node;
 							
@@ -741,8 +764,12 @@ var CaptionRenderer = (function(global) {
 							rendered.updateTime(currentTime);
 							timeHash += rendered.timeHash;
 							
-							if(track.mode === "showing" && track.kind !== "metadata"){
-								(track.kind === 'descriptions'?descriptor:container).appendChild(rendered.node);
+							if(track.mode === "showing"){
+								if(track.kind === 'descriptions'){
+									descriptor.appendChild(rendered.node);
+								}else if(track.kind !== "chapters" && track.kind !== "metadata"){
+									container.appendChild(rendered.node);
+								}
 							}
 							
 							if(typeof cue.onenter === 'function'){
@@ -750,7 +777,7 @@ var CaptionRenderer = (function(global) {
 							}
 						}
 						
-						if(rendered.autoPosition){
+						if(rendered.autoPosition && rendered.visible){
 							positionCue(rendered,renderer,videoMetrics,true);
 						}
 						
@@ -766,7 +793,10 @@ var CaptionRenderer = (function(global) {
 					}
 				});
 				
-				container.style.visibility = "visible";
+				container.style.opacity = 1;
+				if(renderer.showDescriptions){
+					descriptor.style.opacity = 1;
+				}
 				
 				this.renderedCues = newCues;
 				this.hash = hash;
@@ -774,7 +804,9 @@ var CaptionRenderer = (function(global) {
 			}else{
 				timeHash = this.renderedCues.map(function(rendered){ return cueTime(rendered.cue,currentTime); }).join();
 				if(this.timeHash !== timeHash){
-					container.style.visibility = "hidden";
+					container.style.opacity = 0;
+					descriptor.style.opacity = 0
+					
 					this.availableCueArea = {
 						"top": 0, "left": 0,
 						"bottom": videoMetrics.height,
@@ -784,11 +816,14 @@ var CaptionRenderer = (function(global) {
 					};
 					this.renderedCues.forEach(function(rendered){
 						rendered.updateTime(currentTime);
-						if(rendered.autoPosition && rendered.cue.parentNode === renderer.container){
+						if(rendered.autoPosition && rendered.visible){
 							positionCue(rendered,renderer,videoMetrics,true);
 						}
 					});
-					container.style.visibility = "visible";
+					container.style.opacity = 1;
+					if(renderer.showDescriptions){
+						descriptor.style.opacity = 1;
+					}
 					this.timeHash = timeHash;
 				}
 			}
@@ -797,12 +832,14 @@ var CaptionRenderer = (function(global) {
 		CaptionRenderer.prototype.refreshLayout = function() {
 			var renderer = this,
 				container = this.container,
+				descriptor = this.descriptor,
 				currentTime = this.currentTime,
 				hashCue = renderer.hashCue,
 				videoMetrics = getDisplayMetrics(renderer);
 
 			// Get the canvas ready
-			container.style.visibility = "hidden";
+			container.style.opacity = 0;
+			descriptor.style.opacity = 0;
 			styleCueContainer(this,videoMetrics);
 		
 			// Define storage for the available cue area, diminished as further cues are added
@@ -818,11 +855,14 @@ var CaptionRenderer = (function(global) {
 			};
 			this.renderedCues.forEach(function(rendered) {
 				rendered.updateTime(currentTime);
-				if(rendered.autoPosition && rendered.cue.parentNode === renderer.container){
+				if(rendered.autoPosition && rendered.visible){
 					positionCue(rendered,renderer,videoMetrics,false);
 				}
 			});
-			container.style.visibility = "visible";
+			container.style.opacity = 1;
+			if(renderer.showDescriptions){
+				descriptor.style.opacity = 1;
+			}
 			//refresh was probably called because cue contents changed, so we better update the hash
 			this.hash = this.renderedCues.map(function(rendered){ return hashCue(rendered.cue,currentTime); }).join();
 			this.timeHash = this.renderedCues.map(function(rendered){ return cueTime(rendered.cue,currentTime); }).join();
