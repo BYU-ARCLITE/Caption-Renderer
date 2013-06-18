@@ -44,7 +44,7 @@ var CaptionRenderer = (function(global) {
 		function spanify(DOMNode,fontSize,lineHeight,chars) {
 			var characterCount = 0,
 				templateNode = document.createElement('span');
-			templateNode.className = 'captionator-cue-character';
+			templateNode.className = 'caption-cue-character';
 			applyStyles(templateNode,{
 				"height":	fontSize + "px",
 				"width":	lineHeight + "px"
@@ -71,7 +71,7 @@ var CaptionRenderer = (function(global) {
 		}
 		
 		function getspanchars(DOMNode,fontSize,lineHeight,chars) {
-			[].push.apply(chars,DOMNode.querySelectorAll('.captionator-cue-character'));
+			[].push.apply(chars,DOMNode.querySelectorAll('.caption-cue-character'));
 			return chars;
 		}
 		
@@ -314,10 +314,7 @@ var CaptionRenderer = (function(global) {
 	
 	function defaultRenderCue(renderedCue,area,kind){
 		var node = document.createElement('div');
-		node.appendChild(cue.getCueAsHTML(kind==='subtitles'));
-		if(kind === 'descriptions'){
-			node.setAttribute('aria-live','assertive');
-		}
+		node.appendChild(renderedCue.cue.getCueAsHTML(kind==='subtitles'));
 		renderedCue.node = node;
 	}
 	
@@ -366,9 +363,10 @@ var CaptionRenderer = (function(global) {
 		var media, renderer = this,
 			timeupdate = function(){ renderer.currentTime = (media?media.currentTime:0) || 0; },
 			container = document.createElement("div"),
-			containerID = "captionator-canvas-"+(Math.random()*9999).toString(16),
+			descriptor = document.createElement("div"),
+			descriptorId = "description-display-"+(Math.random()*9999).toString(16),
 			internalTime = 0,
-			appendCueCanvasTo = (options.appendCueCanvasTo instanceof HTMLElement)?options.appendCueCanvasTo:null,
+			appendCueCanvasTo = (options.appendCueCanvasTo instanceof HTMLElement)?options.appendCueCanvasTo:document.body,
 			minFontSize = (typeof(options.minFontSize) === "number")?options.minFontSize:10,			//pt
 			minLineHeight = (typeof(options.minimumLineHeight) === "number")?options.minLineHeight:16,	//pt
 			fontSizeRatio = (typeof(options.fontSizeRatio) === "number")?options.fontSizeRatio:0.045,	//	Caption font size is 4.5% of the video height
@@ -378,15 +376,19 @@ var CaptionRenderer = (function(global) {
 			hashCue = typeof options.hashCue === 'function'?options.hashCue:defaultHashCue,
 			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue;
 
-		container.id = containerID;
-		container.className = "captionator-cue-canvas";	
-		//container.setAttribute("aria-live","assertive");
-	
-		if (String(element.getAttribute("aria-describedby")).indexOf(containerID) === -1) {
-			element.setAttribute("aria-describedby",(element.hasAttribute("aria-describedby") ? element.getAttribute("aria-describedby") + " " : "")+containerID);
-		}
+		container.className = "caption-cue-canvas";
+		
+		descriptor.id = descriptorId;
+		descriptor.className = "caption-desc-area";	
+		descriptor.setAttribute("aria-live","assertive");
+		
+		appendCueCanvasTo.appendChild(container);
+		appendCueCanvasTo.appendChild(descriptor);
+		
+		element.setAttribute("aria-describedby",element.hasAttribute("aria-describedby") ? element.getAttribute("aria-describedby") + " " + descriptorId : descriptorId);
 		
 		this.container = container;
+		this.descriptor = descriptor;
 		this.tracks = [];
 		this.element = element;
 		this.renderedCues = [];
@@ -536,12 +538,6 @@ var CaptionRenderer = (function(global) {
 			var container = renderer.container,
 				videoElement = renderer.element,
 				videoMetrics, baseFontSize, baseLineHeight;
-			
-			if (!container.parentNode) {
-				((renderer.appendCueCanvasTo instanceof HTMLElement)
-					?renderer.appendCueCanvasTo
-					:document.body).appendChild(container);
-			}
 		
 			// Set up font metrics
 			baseFontSize = Math.max(((videoMetrics.height * renderer.fontSizeRatio)/96)*72,renderer.minFontSize);
@@ -636,7 +632,7 @@ var CaptionRenderer = (function(global) {
 				node: {
 					set: function(nnode){
 						node = nnode instanceof HTMLElement?nnode:null;
-						node.classList.add("captionator-cue");
+						node.classList.add("caption-cue");
 						return node;
 					},
 					get: function(){ return node; },
@@ -663,6 +659,9 @@ var CaptionRenderer = (function(global) {
 
 		RenderedCue.prototype.cleanup = function(){
 			this.collector();
+			if(this.node.parentNode){
+				this.node.parentNode.removeChild(this.node);
+			}
 			if(typeof this.cue.onexit === 'function'){
 				this.cue.onexit();
 			}
@@ -673,6 +672,7 @@ var CaptionRenderer = (function(global) {
 			var renderer = this,
 				cache = this.cache,
 				container = this.container,
+				descriptor = this.descriptor,
 				currentTime = this.currentTime,
 				hashCue = renderer.hashCue,
 				renderCue = renderer.renderCue,
@@ -683,7 +683,7 @@ var CaptionRenderer = (function(global) {
 			// Work out what cues are showing...
 			//WHY IS IT SKIPPING CUES?
 			activeTracks = this.tracks.filter(function(track) {
-				return track.mode === "showing" && track.readyState === TextTrack.LOADED;
+				return track.mode !== "disabled" && track.readyState === TextTrack.LOADED;
 			});
 			activeTracks.forEach(function(track){
 				if(track.kind === "captions" || track.kind === "subtitles" || track.kind === "descriptions") {
@@ -696,7 +696,6 @@ var CaptionRenderer = (function(global) {
 				// Get the canvas ready if it isn't already
 				container.style.visibility = "hidden";
 				styleCueContainer(this,videoMetrics);
-				container.innerHTML = "";
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
 				// (depending on whether the 'direction' of the cue is vertical or horizontal)
@@ -726,7 +725,7 @@ var CaptionRenderer = (function(global) {
 							rendered.updateTime(currentTime);
 							timeHash += rendered.timeHash;
 						}else{
-							autoPos = track.kind === "captions" || track.kind === "subtitles";
+							autoPos = track.kind !== "descriptions" && track.kind !== "metadata";
 							rendered = new RenderedCue(cue,autoPos);
 							renderCue(rendered,renderer.availableCueArea,track.kind);
 							node = rendered.node;
@@ -739,14 +738,12 @@ var CaptionRenderer = (function(global) {
 								node.setAttribute('lang',track.language);
 							}
 							
-							if(!autoPos){
-								node.style.visibility = "hidden";
-							}
-							
 							rendered.updateTime(currentTime);
 							timeHash += rendered.timeHash;
 							
-							container.appendChild(rendered.node);
+							if(track.mode === "showing" && track.kind !== "metadata"){
+								(track.kind === 'descriptions'?descriptor:container).appendChild(rendered.node);
+							}
 							
 							if(typeof cue.onenter === 'function'){
 								cue.onenter();
@@ -760,7 +757,6 @@ var CaptionRenderer = (function(global) {
 						newCues.push(rendered);
 					});
 				});
-				container.style.visibility = "visible";
 				
 				this.renderedCues.forEach(function(old){
 					if(newCues.indexOf(old) !== -1){ return; }
@@ -769,6 +765,8 @@ var CaptionRenderer = (function(global) {
 						this.media.pause();
 					}
 				});
+				
+				container.style.visibility = "visible";
 				
 				this.renderedCues = newCues;
 				this.hash = hash;
@@ -786,7 +784,7 @@ var CaptionRenderer = (function(global) {
 					};
 					this.renderedCues.forEach(function(rendered){
 						rendered.updateTime(currentTime);
-						if(rendered.autoPosition){
+						if(rendered.autoPosition && rendered.cue.parentNode === renderer.container){
 							positionCue(rendered,renderer,videoMetrics,true);
 						}
 					});
@@ -820,7 +818,7 @@ var CaptionRenderer = (function(global) {
 			};
 			this.renderedCues.forEach(function(rendered) {
 				rendered.updateTime(currentTime);
-				if(rendered.autoPosition){
+				if(rendered.autoPosition && rendered.cue.parentNode === renderer.container){
 					positionCue(rendered,renderer,videoMetrics,false);
 				}
 			});

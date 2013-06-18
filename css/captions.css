@@ -1,25 +1,4 @@
-/*
-	This file is designed to show how CSS can be used to style elements in the captions themselves.
-	You don't have to include it in your own project.
-*/
-
-.arduino {
-	color: red;
-	text-transform: uppercase;
-	font-family: "Helvetica Neue";
-	font-weight: lighter;
-}
-
-.captionator-title a {
-	text-decoration: none;
-	font-weight: bold;
-	letter-spacing: 5pt;
-	font-family: "Helvetica Neue";
-	font-weight: bolder;
-	color: red;
-}
-
-.captionator-cue-canvas {
+.caption-cue-canvas {
 	pointer-events: none;
 	position: absolute;
 	overflow: hidden;
@@ -27,24 +6,31 @@
 	-moz-box-sizing: border-box;
 }
 
-.captionator-cue {
+/*visually hidden, but accessible to screen readers*/
+.caption-desc-area {
+	pointer-events: none;
+	position: absolute !important;
+	opacity: 0;
+}
+
+.caption-cue {
 	pointer-events: auto;
 	overflow: hidden;
 }
 
-.captionator-cue-character {
+.caption-cue-character {
 	position: absolute;
 	display: block;
 	line-height: auto;
 	text-align: center;
 }
 
-span[data-voice]:before {
+.caption-cue span[data-voice]:before {
 	content: attr(data-voice);
 	color:red;
 	margin-right: 0.5em;
 }
 
-q[data-voice]:after {
+.caption-cue q[data-voice]:after {
 	content: "";
 }
