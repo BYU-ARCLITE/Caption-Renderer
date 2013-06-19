@@ -312,8 +312,9 @@ var CaptionRenderer = (function(global) {
 		});
 	}
 	
-	function defaultRenderCue(renderedCue,area,kind){
-		var node;
+	function defaultRenderCue(renderedCue,area){
+		var node, kind = renderedCue.kind;
+		if(renderedCue.dirty){ renderedCue.cleanup(); }			
 		if(kind === "chapters" || kind === "metadata"){ return; }
 		node = document.createElement('div');
 		node.appendChild(renderedCue.cue.getCueAsHTML(kind==='subtitles'));
@@ -332,25 +333,6 @@ var CaptionRenderer = (function(global) {
 		return otime;
 	}
 	
-	function hashCode(str){
-		var hash, i;
-		for(hash = i = 0; i < str.length; i++){
-			hash = ((hash<<5)-hash+str.charCodeAt(i))|0; //bitwise or forces to 32-bit integer
-		}
-		return hash.toString(16);
-	};
-	
-	function defaultHashCue(cue){
-		return hashCode(cue.text)
-			+cue.startTime
-			+cue.endTime
-			+cue.size
-			+cue.vertical
-			+cue.line
-			+cue.position
-			+cue.align;
-	}
-		
 	/* CaptionRenderer([dom element],
 						[options - JS Object])
 	
@@ -375,7 +357,6 @@ var CaptionRenderer = (function(global) {
 			lineHeightRatio = (typeof(options.lineHeightRatio) === "number")?options.lineHeightRatio:1.3,	//	Caption line height is 1.3 times the font size
 			sizeCuesByTextBoundingBox = !!options.sizeCuesByTextBoundingBox,
 			cueBgColor = (typeof(options.cueBgColor) === "string")?options.cueBgColor:"rgba(0,0,0,0.5)",
-			hashCue = typeof options.hashCue === 'function'?options.hashCue:defaultHashCue,
 			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
 			showDescriptions = !!options.showDescriptions;
 
@@ -495,14 +476,6 @@ var CaptionRenderer = (function(global) {
 				},
 				enumerable: true
 			},
-			hashCue: {
-				get: function(){ return hashCue; },
-				set: function(val){
-					hashCue = typeof val === 'function'?val:defaultHashCue;
-					return hashCue;
-				},
-				enumerable: true
-			},
 			renderCue: {
 				get: function(){ return renderCue; },
 				set: function(val){
@@ -613,7 +586,7 @@ var CaptionRenderer = (function(global) {
 				}
 				if(node.childNodes){ children.push.apply(children,node.childNodes); }
 			}
-			return pastNode?pastNode.dataset.seconds:0;
+			return pastNode?pastNode.dataset.seconds:"";
 		}
 		
 		function timeStyle(node){ //TODO: read stylesheets
@@ -632,13 +605,52 @@ var CaptionRenderer = (function(global) {
 			Auxilliary object for keeping track of a cue that is currently active with a rendered representation.
 			Provides the interface for interacting with custom render functions.
 		*/
-		function RenderedCue(renderer, cue, autoPos){
-			var node = null, gc = function(){};
+		function RenderedCue(renderer, cue, track){
+			var node = null,
+				markedTime = "", 
+				gc = function(){},
+				cText = cue.text,
+				cSize = cue.size,
+				cVert = cue.vertical,
+				cLine = cue.line,
+				cPos = cue.position,
+				cAlign = cue.align;
 			
-			this.cue = cue;
-			this.node = null;
-			this.autoPosition = autoPos;
-			this.timeHash = "";
+			this.done = false;
+			this.dirty = false;
+			this.time = "";
+			this.autoPosition = track.kind !== "descriptions" && track.kind !== "metadata";
+			
+			this.updateContent = function(){
+				switch(true){
+				case cue.text !== cText:
+					cText = cue.text;
+				case cue.size !== cSize:
+					cSize = cue.size;
+				case cue.vertical !== cVert:
+					cVert = cue.vertical;
+				case cue.line !== cLine:
+					cLine = cue.line;
+				case cue.position !== cPos:
+					cPos = cue.position;
+				case cue.align !== cAlign:
+					cAlign = cue.align;
+					this.dirty = true;
+					return true;
+				default:
+					return false;
+				}
+			};
+			
+			this.updateTime = function(time){
+				var newTime;
+				if(!(this.node instanceof HTMLElement)){ return false; }
+				newTime = markTimes(this.node,time);
+				if(markedTime === newTime){ return false; }
+				markedTime = newTime;
+				timeStyle(this.node);
+				return true;
+			};
 			
 			Object.defineProperties(this,{
 				node: {
@@ -658,6 +670,26 @@ var CaptionRenderer = (function(global) {
 					get: function(){ return gc; },
 					enumerable: true
 				},
+				cue: {
+					get: function(){ return cue; },
+					enumerable: true
+				},
+				kind: {
+					get: function(){ return track.kind; },
+					enumerable: true
+				},
+				mode: {
+					get: function(){ return track.mode; },
+					enumerable: true
+				},
+				language: {
+					get: function(){ return track.language; },
+					enumerable: true
+				},
+				trackLabel: {
+					get: function(){ return track.label; },
+					enumerable: true
+				},
 				visible: {
 					get: function(){
 						if(!this.node){ return false; }
@@ -671,54 +703,75 @@ var CaptionRenderer = (function(global) {
 				}
 			});
 		}
-		
-		RenderedCue.prototype.updateTime = function(time){
-			//Handle karaoke styling
-			if(this.node instanceof HTMLElement){
-				this.timeHash = markTimes(this.node,time);
-				timeStyle(this.node);
-			}
-		};
 
 		RenderedCue.prototype.cleanup = function(){
 			this.collector();
 			if(this.node.parentNode){
 				this.node.parentNode.removeChild(this.node);
 			}
-			if(typeof this.cue.onexit === 'function'){
-				this.cue.onexit();
-			}
 		};
 		
+		function collectCues(tracks, fn){
+			var activeCues = []
+			tracks.forEach(function(track) {
+				if(track.mode === "disabled" || track.readyState !== TextTrack.LOADED){ return; }
+				[].push.apply(activeCues,[].map.call(track.activeCues,fn.bind(null,track)));
+			});
+			return activeCues;
+		}
 		
-		CaptionRenderer.prototype.rebuildCaptions = function(dirtyBit) {
+		CaptionRenderer.prototype.rebuildCaptions = function(force) {
 			var renderer = this,
-				cache = this.cache,
 				container = this.container,
 				descriptor = this.descriptor,
 				currentTime = this.currentTime,
-				hashCue = renderer.hashCue,
 				renderCue = renderer.renderCue,
-				videoMetrics = getDisplayMetrics(this),
-				activeTracks, newCues,
-				hash = "", timeHash = "";
+				renderedCues = this.renderedCues,
+				timeBit = false, dirtyBit = force,
+				activeCues, videoMetrics, defRender;
+				
+			if(force){
+				//force re-render no matter what
+				renderedCues.forEach(function(rendered){
+					var node = rendered.node;
+					if(node && node.parentNode){ node.parentNode.removeChild(node); }
+				});
+				activeCues = collectCues(this.tracks, function(track, cue){
+					if(typeof cue.onenter === 'function' && renderedCues.every(function(rendered){ return rendered.cue !== cue; })){
+						setTimeout(cue.onenter.bind(cue),0);
+					}
+					return new RenderedCue(renderer,cue,track);
+				});
+			}else{
+				//find out if any cues are different
+				activeCues = collectCues(this.tracks, function(track, cue){
+					var i, cached;
+					for(i=0;cached = renderer.renderedCues[i];i++){
+						if(cached.cue === cue){
+							dirtyBit = dirtyBit || cached.updateContent();
+							if(!dirtyBit){
+								timeBit = timeBit || cached.updateTime(currentTime);
+							}
+							return cached;
+						}
+					}
+					dirtyBit = true;
+					if(typeof cue.onenter === 'function'){
+						setTimeout(cue.onenter.bind(cue),0);
+					}
+					return new RenderedCue(renderer,cue,track);
+				});
+			}
+			
 
-			// Work out what cues are showing...
-			//WHY IS IT SKIPPING CUES?
-			activeTracks = this.tracks.filter(function(track) {
-				return track.mode !== "disabled" && track.readyState === TextTrack.LOADED;
-			});
-			activeTracks.forEach(function(track){
-				if(track.kind === "captions" || track.kind === "subtitles" || track.kind === "descriptions") {
-					hash += [].map.call(track.activeCues,function(cue){ return hashCue(cue); }).join();
-				}
-			});
-
-			// If any of them are different, we redraw them to the screen.
-			if(dirtyBit || (this.hash !== hash)){
+			// If needed, redraw
+			if(dirtyBit){
 				container.style.opacity = 0;
 				descriptor.style.opacity = 0;
+				
+				videoMetrics = getDisplayMetrics(this);
 				styleCueContainer(this,videoMetrics);
+				
 				// Define storage for the available cue area, diminished as further cues are added
 				// Cues occupy the largest possible area they can, either by width or height
 				// (depending on whether the 'direction' of the cue is vertical or horizontal)
@@ -731,63 +784,45 @@ var CaptionRenderer = (function(global) {
 					"width": videoMetrics.width
 				};
 				
-				newCues = [];
-				activeTracks.forEach(function(track){
-					track.activeCues.forEach(function(cue){
-						var rendered, cached, node, autoPos;
-						
-						cached = renderer.renderedCues.some(function(old){
-							if(old.cue === cue){
-								rendered = old;
-								return true;
-							}
-							return false;
-						});
-						
-						if(cached){
-							rendered.updateTime(currentTime);
-							timeHash += rendered.timeHash;
-						}else{
-							autoPos = track.kind !== "descriptions" && track.kind !== "metadata";
-							rendered = new RenderedCue(renderer,cue,autoPos);
-							renderCue(rendered,renderer.availableCueArea,track.kind);
-							node = rendered.node;
+				activeCues.forEach(function(rendered){
+					var node, kind = rendered.kind;
+					
+					if(!rendered.done || rendered.dirty){
+						renderCue(rendered,renderer.availableCueArea,
+							function(){ defaultRenderCue(rendered,renderer.availableCueArea); });
+						rendered.done = true;
+						rendered.dirty = false;
+						node = rendered.node;
 							
-							if(!(node instanceof HTMLElement)){
-								return;
-							}
+						if(node === null){ return; }
 							
-							if(!node.hasAttribute('lang')){
-								node.setAttribute('lang',track.language);
-							}
-							
-							rendered.updateTime(currentTime);
-							timeHash += rendered.timeHash;
-							
-							if(track.mode === "showing"){
-								if(track.kind === 'descriptions'){
-									descriptor.appendChild(rendered.node);
-								}else if(track.kind !== "chapters" && track.kind !== "metadata"){
-									container.appendChild(rendered.node);
-								}
-							}
-							
-							if(typeof cue.onenter === 'function'){
-								cue.onenter();
-							}
+						if(!node.hasAttribute('lang')){
+							node.setAttribute('lang',rendered.language);
 						}
 						
-						if(rendered.autoPosition && rendered.visible){
-							positionCue(rendered,renderer,videoMetrics,true);
-						}
+						rendered.updateTime(currentTime);
 						
-						newCues.push(rendered);
-					});
+						if(rendered.mode === "showing" && node.parentNode === null){
+							if(kind === 'descriptions'){
+								descriptor.appendChild(node);
+							}else if(kind !== "chapters" && kind !== "metadata"){
+								container.appendChild(node);
+							}
+						}
+					}else if(rendered.node === null){ return; }
+										
+					if(rendered.autoPosition && rendered.visible){
+						positionCue(rendered,renderer,videoMetrics,true);
+					}
 				});
 				
-				this.renderedCues.forEach(function(old){
-					if(newCues.indexOf(old) !== -1){ return; }
+				renderedCues.forEach(function(old){
+					//check for lapse to inactive status
+					if(activeCues.some(function(rendered){ return rendered.cue === old.cue; })){ return; }
 					old.cleanup();
+					if(typeof old.cue.onexit === 'function'){
+						setTimeout(old.cue.onexit.bind(old.cue),0);
+					}
 					if(old.cue.pauseOnExit && this.media && typeof this.media.pause == 'function'){
 						this.media.pause();
 					}
@@ -798,33 +833,30 @@ var CaptionRenderer = (function(global) {
 					descriptor.style.opacity = 1;
 				}
 				
-				this.renderedCues = newCues;
-				this.hash = hash;
-				this.timeHash = timeHash;
-			}else{
-				timeHash = this.renderedCues.map(function(rendered){ return cueTime(rendered.cue,currentTime); }).join();
-				if(this.timeHash !== timeHash){
-					container.style.opacity = 0;
-					descriptor.style.opacity = 0
-					
-					this.availableCueArea = {
-						"top": 0, "left": 0,
-						"bottom": videoMetrics.height,
-						"right": videoMetrics.width,
-						"height": videoMetrics.height,
-						"width": videoMetrics.width
-					};
-					this.renderedCues.forEach(function(rendered){
-						rendered.updateTime(currentTime);
-						if(rendered.autoPosition && rendered.visible){
-							positionCue(rendered,renderer,videoMetrics,true);
-						}
-					});
-					container.style.opacity = 1;
-					if(renderer.showDescriptions){
-						descriptor.style.opacity = 1;
+				this.renderedCues = activeCues;
+			}else if(timeBit){
+				//just reposition things, in case the karaoke styling altered metrics
+				container.style.opacity = 0;
+				descriptor.style.opacity = 0;
+				
+				videoMetrics = getDisplayMetrics(this);
+				styleCueContainer(this,videoMetrics);
+				
+				this.availableCueArea = {
+					"top": 0, "left": 0,
+					"bottom": videoMetrics.height,
+					"right": videoMetrics.width,
+					"height": videoMetrics.height,
+					"width": videoMetrics.width
+				};
+				renderedCues.forEach(function(rendered){
+					if(rendered.autoPosition && rendered.visible){
+						positionCue(rendered,renderer,videoMetrics,true);
 					}
-					this.timeHash = timeHash;
+				});
+				container.style.opacity = 1;
+				if(renderer.showDescriptions){
+					descriptor.style.opacity = 1;
 				}
 			}
 		};
@@ -834,7 +866,6 @@ var CaptionRenderer = (function(global) {
 				container = this.container,
 				descriptor = this.descriptor,
 				currentTime = this.currentTime,
-				hashCue = renderer.hashCue,
 				videoMetrics = getDisplayMetrics(renderer);
 
 			// Get the canvas ready
@@ -855,6 +886,7 @@ var CaptionRenderer = (function(global) {
 			};
 			this.renderedCues.forEach(function(rendered) {
 				rendered.updateTime(currentTime);
+				rendered.updateContent();
 				if(rendered.autoPosition && rendered.visible){
 					positionCue(rendered,renderer,videoMetrics,false);
 				}
@@ -863,9 +895,6 @@ var CaptionRenderer = (function(global) {
 			if(renderer.showDescriptions){
 				descriptor.style.opacity = 1;
 			}
-			//refresh was probably called because cue contents changed, so we better update the hash
-			this.hash = this.renderedCues.map(function(rendered){ return hashCue(rendered.cue,currentTime); }).join();
-			this.timeHash = this.renderedCues.map(function(rendered){ return cueTime(rendered.cue,currentTime); }).join();
 		};
 	}());
 	
