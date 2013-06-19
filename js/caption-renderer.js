@@ -129,7 +129,6 @@ var CaptionRenderer = (function(global) {
 				"height": pixelLineHeight + "px", //so the scrollheight has a baseline to work from
 				"padding": cuePaddingTB + "px " + cuePaddingLR + "px",
 				"textAlign": (cueVertical !== "")?"":(cueObject.align === "middle"?"center":cueObject.align),
-				"backgroundColor": renderer.cueBgColor,
 				"direction": checkDirection(""+cueObject.text),
 				"lineHeight": baseLineHeight + "pt",
 				"boxSizing": "border-box"
@@ -356,7 +355,6 @@ var CaptionRenderer = (function(global) {
 			fontSizeRatio = (typeof(options.fontSizeRatio) === "number")?options.fontSizeRatio:0.045,	//	Caption font size is 4.5% of the video height
 			lineHeightRatio = (typeof(options.lineHeightRatio) === "number")?options.lineHeightRatio:1.3,	//	Caption line height is 1.3 times the font size
 			sizeCuesByTextBoundingBox = !!options.sizeCuesByTextBoundingBox,
-			cueBgColor = (typeof(options.cueBgColor) === "string")?options.cueBgColor:"rgba(0,0,0,0.5)",
 			renderCue = typeof options.renderCue === 'function'?options.renderCue:defaultRenderCue,
 			showDescriptions = !!options.showDescriptions;
 
@@ -464,15 +462,6 @@ var CaptionRenderer = (function(global) {
 					sizeCuesByTextBoundingBox = !!val;
 					this.refreshLayout();
 					return sizeCuesByTextBoundingBox;
-				},
-				enumerable: true
-			},
-			cueBgColor: {
-				get: function(){ return cueBgColor; },
-				set: function(val){
-					cueBgColor = ""+val;
-					this.rebuildCaptions(true);
-					return cueBgColor;
 				},
 				enumerable: true
 			},
@@ -655,6 +644,9 @@ var CaptionRenderer = (function(global) {
 			Object.defineProperties(this,{
 				node: {
 					set: function(nnode){
+						if(node && node !== nnode && node.parentNode){
+							node.parentNode.removeChild(node);
+						}
 						node = nnode instanceof HTMLElement?nnode:null;
 						node.classList.add("caption-cue");
 						return node;

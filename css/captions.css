@@ -20,6 +20,7 @@
 .caption-cue {
 	pointer-events: auto;
 	overflow: hidden;
+	background-color: rgba(0,0,0,0.5);
 }
 
 .caption-cue-character {
