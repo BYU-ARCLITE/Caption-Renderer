@@ -727,7 +727,7 @@ var CaptionRenderer = (function(global) {
 				currentTime = this.currentTime,
 				renderCue = renderer.renderCue,
 				renderedCues = this.renderedCues,
-				timeBit = false, dirtyBit = force,
+				posBit = false, dirtyBit = force,
 				activeCues, videoMetrics, defRender;
 				
 			if(force){
@@ -737,9 +737,6 @@ var CaptionRenderer = (function(global) {
 					if(node && node.parentNode){ node.parentNode.removeChild(node); }
 				});
 				activeCues = collectCues(this.tracks, function(track, cue){
-					if(typeof cue.onenter === 'function' && renderedCues.every(function(rendered){ return rendered.cue !== cue; })){
-						setTimeout(cue.onenter.bind(cue),0);
-					}
 					return new RenderedCue(renderer,cue,track);
 				});
 			}else{
@@ -750,16 +747,24 @@ var CaptionRenderer = (function(global) {
 						if(cached.cue === cue){
 							dirtyBit = dirtyBit || cached.updateContent();
 							if(!dirtyBit){
-								timeBit = timeBit || cached.updateTime(currentTime);
+								posBit = posBit || cached.updateTime(currentTime);
 							}
 							return cached;
 						}
 					}
 					dirtyBit = true;
-					if(typeof cue.onenter === 'function'){
-						setTimeout(cue.onenter.bind(cue),0);
-					}
 					return new RenderedCue(renderer,cue,track);
+				});
+				
+				renderedCues.forEach(function(old){
+					//check for lapse to inactive status
+					if(activeCues.some(function(rendered){ return rendered.cue === old.cue; })){ return; }
+					posBit = true;
+					
+					old.cleanup();
+					if(old.cue.pauseOnExit && this.media && typeof this.media.pause == 'function'){
+						this.media.pause();
+					}
 				});
 			}
 			
@@ -815,27 +820,8 @@ var CaptionRenderer = (function(global) {
 						positionCue(rendered,renderer,videoMetrics,true);
 					}
 				});
-				
-				renderedCues.forEach(function(old){
-					//check for lapse to inactive status
-					if(activeCues.some(function(rendered){ return rendered.cue === old.cue; })){ return; }
-					old.cleanup();
-					if(typeof old.cue.onexit === 'function'){
-						setTimeout(old.cue.onexit.bind(old.cue),0);
-					}
-					if(old.cue.pauseOnExit && this.media && typeof this.media.pause == 'function'){
-						this.media.pause();
-					}
-				});
-				
-				container.style.opacity = 1;
-				if(renderer.showDescriptions){
-					descriptor.style.opacity = 1;
-				}
-				
-				this.renderedCues = activeCues;
-			}else if(timeBit){
-				//just reposition things, in case the karaoke styling altered metrics
+			}else if(posBit){
+				//just reposition things, in case the karaoke styling altered metrics or something disappeared
 				container.style.opacity = 0;
 				descriptor.style.opacity = 0;
 				
@@ -854,10 +840,12 @@ var CaptionRenderer = (function(global) {
 						positionCue(rendered,renderer,videoMetrics,true);
 					}
 				});
-				container.style.opacity = 1;
-				if(renderer.showDescriptions){
-					descriptor.style.opacity = 1;
-				}
+			}
+			
+			this.renderedCues = activeCues;
+			container.style.opacity = 1;
+			if(this.showDescriptions){
+				descriptor.style.opacity = 1;
 			}
 		};
 		
@@ -892,7 +880,7 @@ var CaptionRenderer = (function(global) {
 				}
 			});
 			container.style.opacity = 1;
-			if(renderer.showDescriptions){
+			if(this.showDescriptions){
 				descriptor.style.opacity = 1;
 			}
 		};
